@@ -1,0 +1,33 @@
+.env
+ui_template.html
+backend_and_knowledge.md
+task.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.eggs/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Database
+.pgdata/
+
+# Node
+node_modules/
+.next/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: lazy-matcher-api
+    runtime: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install .
+      alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    region: oregon
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_SYNC
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+      - key: API_PREFIX
+        value: /api/v1
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+  - type: worker
+    name: lazy-matcher-worker
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install .
+    startCommand: python -m app.worker.runner --worker-id render-worker-1 --poll-interval 2
+    plan: free
+    region: oregon
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_SYNC
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.0"

@@ -9,7 +9,7 @@ import pytest
 
 os.environ.setdefault(
     "DATABASE_URL",
-    "postgresql+asyncpg://anon@127.0.0.1:5432/lazy_matcher",
+    "postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/lazy_matcher",
 )
 
 from httpx import AsyncClient, ASGITransport

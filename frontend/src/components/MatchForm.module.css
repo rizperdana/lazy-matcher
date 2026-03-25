@@ -115,3 +115,14 @@
 .btnGhost:hover {
   transform: translateY(-1px);
 }
+
+.selectSm {
+  width: auto;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(9, 16, 27, 0.85);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}

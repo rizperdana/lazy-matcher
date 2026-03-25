@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { submitBatch, fetchJobs, type MatchJob } from "@/lib/api";
 import { MatchForm } from "./MatchForm";
@@ -8,11 +8,21 @@ import { ResultsList } from "./ResultsList";
 import { StatusSummary } from "./StatusSummary";
 import styles from "./MatchDashboard.module.css";
 
+function formatTime(date: Date): string {
+  return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}:${date.getSeconds().toString().padStart(2, "0")}`;
+}
+
 export function MatchDashboard() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [scoreFilter, setScoreFilter] = useState<number>(0);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [yearFilter, setYearFilter] = useState<number>(0);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  // Initialize lastRefresh on client only to avoid hydration mismatch
+  useEffect(() => {
+    setLastRefresh(new Date());
+  }, []);
 
   // Poll jobs list
   const { data, isLoading, isError, error } = useQuery({
@@ -44,11 +54,12 @@ export function MatchDashboard() {
     setLastRefresh(new Date());
   }, [queryClient]);
 
-  const jobs = (data?.items ?? []).filter((j) =>
-    scoreFilter > 0 && j.status === "completed"
-      ? (j.score_overall ?? 0) >= scoreFilter
-      : true
-  );
+  const jobs = (data?.items ?? []).filter((j) => {
+    if (j.status !== "completed") return true;
+    if (scoreFilter > 0 && (j.score_overall ?? 0) < scoreFilter) return false;
+    if (yearFilter > 0 && (j.years_experience ?? 0) < yearFilter) return false;
+    return true;
+  });
 
   // Compute status counts
   const counts = {
@@ -112,7 +123,7 @@ export function MatchDashboard() {
             <div>
               <h2>Results</h2>
               <p>
-                Last refreshed: {lastRefresh.toLocaleTimeString()} • {data?.total ?? 0} total
+                Overall = Skills 50% + Experience 30% + Location 20% • Last refreshed: {lastRefresh ? formatTime(lastRefresh) : "—"} • {data?.total ?? 0} total
               </p>
             </div>
             <div className={styles.row}>
@@ -141,6 +152,21 @@ export function MatchDashboard() {
                 />
                 <span style={{ minWidth: "2.5rem", textAlign: "right" }}>
                   {scoreFilter > 0 ? `${scoreFilter}%` : "off"}
+                </span>
+              </label>
+              <label className={styles.pill} style={{ gap: "0.4rem", cursor: "default" }}>
+                <span>Min YoE:</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={15}
+                  step={1}
+                  value={yearFilter}
+                  onChange={(e) => setYearFilter(Number(e.target.value))}
+                  style={{ width: "80px", accentColor: "var(--accent)" }}
+                />
+                <span style={{ minWidth: "2.5rem", textAlign: "right" }}>
+                  {yearFilter > 0 ? `${yearFilter}y` : "off"}
                 </span>
               </label>
               <button className={styles.btnSecondary} onClick={handleRefresh}>

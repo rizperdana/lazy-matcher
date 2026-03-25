@@ -63,14 +63,13 @@ export function JobCard({ job }: Props) {
                 </div>
                 <div className={styles.mini}>
                   <div className={styles.k}>Experience</div>
-                  <div className={styles.v}>{job.score_experience ?? "--"}%</div>
-                </div>
-                {job.years_experience !== null && job.years_experience !== undefined && (
-                  <div className={styles.mini}>
-                    <div className={styles.k}>YoE</div>
-                    <div className={styles.v}>{job.years_experience}y</div>
+                  <div className={styles.v}>
+                    {job.score_experience ?? "--"}%
+                    {job.years_experience !== null && job.years_experience !== undefined && (
+                      <span style={{ marginLeft: 4, opacity: 0.7 }}>({job.years_experience}y)</span>
+                    )}
                   </div>
-                )}
+                </div>
                 {job.llm_model && (
                   <div className={styles.mini}>
                     <div className={styles.k}>Model</div>

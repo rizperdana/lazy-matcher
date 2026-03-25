@@ -133,18 +133,16 @@ export function MatchForm({ onSubmit, isSubmitting, error }: Props) {
       )}
 
       <div className={styles.field}>
-        <label htmlFor="llm-model">AI scoring model</label>
+        <label htmlFor="llm-model">AI model</label>
         <select
           id="llm-model"
-          className={styles.textarea}
+          className={styles.selectSm}
           value={llmModel}
           onChange={(e) => setLlmModel(e.target.value)}
-          style={{ padding: "0.5rem", height: "auto" }}
         >
-          <option value="gemini">Gemini (default)</option>
+          <option value="gemini">Gemini</option>
           <option value="openrouter">OpenRouter</option>
         </select>
-        <div className={styles.help}>Select which LLM provider to use for scoring.</div>
       </div>
 
       <div className={styles.actions}>

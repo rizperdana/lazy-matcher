@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     DATABASE_URL_SYNC: str = ""
 
     # Upstash Redis
-    UPSTASH_REDIS_URL: str = ""
-    UPSTASH_REDIS_TOKEN: str = ""
+    UPSTASH_REDIS_REST_URL: str = ""
+    UPSTASH_REDIS_REST_TOKEN: str = ""
 
     # LLM Scoring
     GEMINI_AI_KEY: str = ""

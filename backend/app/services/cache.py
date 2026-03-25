@@ -25,8 +25,8 @@ def get_redis():
     from upstash_redis import Redis
 
     settings = get_settings()
-    url = settings.UPSTASH_REDIS_URL
-    token = settings.UPSTASH_REDIS_TOKEN
+    url = settings.UPSTASH_REDIS_REST_URL
+    token = settings.UPSTASH_REDIS_REST_TOKEN
 
     if not url or not token:
         logger.info("Upstash Redis not configured — cache disabled")

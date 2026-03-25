@@ -14,9 +14,13 @@ services:
         sync: false
       - key: DATABASE_URL_SYNC
         sync: false
-      - key: UPSTASH_REDIS_URL
+      - key: UPSTASH_REDIS_REST_URL
         sync: false
-      - key: UPSTASH_REDIS_TOKEN
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: GEMINI_AI_KEY
+        sync: false
+      - key: OPENROUTER_KEY
         sync: false
       - key: API_PREFIX
         value: /api/v1
@@ -35,9 +39,13 @@ services:
         sync: false
       - key: DATABASE_URL_SYNC
         sync: false
-      - key: UPSTASH_REDIS_URL
+      - key: UPSTASH_REDIS_REST_URL
         sync: false
-      - key: UPSTASH_REDIS_TOKEN
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: GEMINI_AI_KEY
+        sync: false
+      - key: OPENROUTER_KEY
         sync: false
       - key: PYTHON_VERSION
         value: "3.12.0"

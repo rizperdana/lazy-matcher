@@ -18,6 +18,7 @@ from app.schemas import (
     MatchJobListResponse,
 )
 from app.services.scoring import is_url, source_hash
+from app.services.notifier import notify_jobs
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -109,6 +110,9 @@ async def create_match_batch(
     # Refresh to get generated fields
     for job in jobs:
         await db.refresh(job)
+
+    # Notify worker via Redis for immediate processing
+    notify_jobs([str(j.id) for j in jobs])
 
     return MatchBatchResponse(
         batch_id=batch.id,

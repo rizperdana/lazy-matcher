@@ -33,6 +33,7 @@ from app.services.scoring import (
 )
 from app.services.cache import get_cached_score, set_cached_score
 from app.services.llm_scoring import get_llm_scorer
+from app.services.notifier import pop_pending_job, queue_length
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +64,7 @@ class MatchWorker:
         self._running = True
 
     async def start(self, poll_interval: float = 2.0):
-        """Main worker loop. Polls for jobs and processes them."""
+        """Main worker loop. Checks Redis for notifications, falls back to DB poll."""
         logger.info(
             f"[{self.worker_id}] Starting worker (poll_interval={poll_interval}s)"
         )
@@ -75,8 +76,11 @@ class MatchWorker:
 
         while self._running:
             try:
-                processed = await self._poll_once()
-                if not processed:
+                # 1. Try Redis notification queue first (immediate processing)
+                processed_redis = await self._drain_redis_queue()
+                # 2. Fall back to DB poll for any remaining jobs
+                processed_db = await self._poll_once()
+                if not processed_redis and not processed_db:
                     await asyncio.sleep(poll_interval)
             except Exception as e:
                 logger.error(f"[{self.worker_id}] Poll error: {e}", exc_info=True)
@@ -87,6 +91,94 @@ class MatchWorker:
     def _shutdown(self):
         logger.info(f"[{self.worker_id}] Shutdown signal received")
         self._running = False
+
+    async def _drain_redis_queue(self) -> bool:
+        """Check Redis for job notifications and process them. Returns True if any processed."""
+        processed = False
+        # Pop up to batch_size job IDs from Redis queue
+        batch_size = (
+            self.settings.LLM_BATCH_SIZE if self.settings.USE_LLM_SCORING else 1
+        )
+        job_ids = []
+        for _ in range(batch_size):
+            jid = pop_pending_job()
+            if jid:
+                job_ids.append(jid)
+            else:
+                break
+
+        if not job_ids:
+            return False
+
+        # Fetch and claim the jobs from DB
+        from uuid import UUID
+
+        valid_ids = []
+        for jid in job_ids:
+            try:
+                valid_ids.append(UUID(jid))
+            except (ValueError, AttributeError):
+                logger.warning(f"[{self.worker_id}] Invalid job ID from queue: {jid}")
+
+        if not valid_ids:
+            return False
+
+        async with self.Session() as session:
+            jobs = await self._claim_specific_jobs(session, valid_ids)
+
+        if not jobs:
+            return False
+
+        if self.settings.USE_LLM_SCORING and len(jobs) > 1:
+            await self._process_job_batch(jobs)
+        else:
+            for job in jobs:
+                await self._process_job(job)
+
+        return True
+
+    async def _claim_specific_jobs(
+        self, session: AsyncSession, job_ids: list[uuid.UUID]
+    ) -> list[MatchJob]:
+        """Claim specific pending jobs by ID using FOR UPDATE SKIP LOCKED."""
+        now = datetime.now(timezone.utc)
+
+        result = await session.execute(
+            text("""
+                UPDATE match_jobs
+                SET status = 'processing',
+                    locked_by = :worker_id,
+                    locked_at = :now,
+                    started_at = :now,
+                    attempt_count = attempt_count + 1,
+                    updated_at = :now
+                WHERE id = ANY(:job_ids)
+                  AND status = 'pending'
+                  AND attempt_count < max_attempts
+                RETURNING id
+            """),
+            {"worker_id": self.worker_id, "now": now, "job_ids": job_ids},
+        )
+
+        rows = result.fetchall()
+        if not rows:
+            return []
+
+        await session.commit()
+
+        claimed_ids = [row[0] for row in rows]
+        job_result = await session.execute(
+            select(MatchJob).where(MatchJob.id.in_(claimed_ids))
+        )
+        jobs = job_result.scalars().all()
+
+        for job in jobs:
+            logger.info(
+                f"[{self.worker_id}] Claimed (redis) job {job.id} "
+                f"(attempt {job.attempt_count}/{job.max_attempts})"
+            )
+
+        return list(jobs)
 
     async def _poll_once(self) -> bool:
         """Claim and process jobs. Returns True if any jobs were processed."""

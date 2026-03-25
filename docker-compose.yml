@@ -10,12 +10,14 @@ services:
              python -m app.db.seed &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/lazy_matcher
-      DATABASE_URL_SYNC: postgresql://postgres:postgres@host.docker.internal:54322/lazy_matcher
+      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
+      GEMINI_AI_KEY: ${GEMINI_AI_KEY}
+      OPENROUTER_KEY: ${OPENROUTER_KEY}
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   worker-1:
     build:
@@ -23,10 +25,12 @@ services:
       dockerfile: Dockerfile
     command: python -m app.worker.runner --worker-id worker-1 --poll-interval 2
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/lazy_matcher
-      DATABASE_URL_SYNC: postgresql://postgres:postgres@host.docker.internal:54322/lazy_matcher
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
+      GEMINI_AI_KEY: ${GEMINI_AI_KEY}
+      OPENROUTER_KEY: ${OPENROUTER_KEY}
 
   worker-2:
     build:
@@ -34,10 +38,12 @@ services:
       dockerfile: Dockerfile
     command: python -m app.worker.runner --worker-id worker-2 --poll-interval 2
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/lazy_matcher
-      DATABASE_URL_SYNC: postgresql://postgres:postgres@host.docker.internal:54322/lazy_matcher
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
+      GEMINI_AI_KEY: ${GEMINI_AI_KEY}
+      OPENROUTER_KEY: ${OPENROUTER_KEY}
 
   frontend:
     build:

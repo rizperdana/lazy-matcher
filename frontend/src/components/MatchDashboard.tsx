@@ -11,6 +11,7 @@ import styles from "./MatchDashboard.module.css";
 export function MatchDashboard() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [scoreFilter, setScoreFilter] = useState<number>(0);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   // Poll jobs list
@@ -23,7 +24,8 @@ export function MatchDashboard() {
 
   // Submit batch mutation
   const mutation = useMutation({
-    mutationFn: (items: string[]) => submitBatch(items),
+    mutationFn: (params: { items: string[]; llmModel: string }) =>
+      submitBatch(params.items, params.llmModel),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       setLastRefresh(new Date());
@@ -31,8 +33,8 @@ export function MatchDashboard() {
   });
 
   const handleSubmit = useCallback(
-    (items: string[]) => {
-      mutation.mutate(items);
+    (items: string[], llmModel: string) => {
+      mutation.mutate({ items, llmModel });
     },
     [mutation]
   );
@@ -42,7 +44,11 @@ export function MatchDashboard() {
     setLastRefresh(new Date());
   }, [queryClient]);
 
-  const jobs = data?.items ?? [];
+  const jobs = (data?.items ?? []).filter((j) =>
+    scoreFilter > 0 && j.status === "completed"
+      ? (j.score_overall ?? 0) >= scoreFilter
+      : true
+  );
 
   // Compute status counts
   const counts = {
@@ -122,6 +128,21 @@ export function MatchDashboard() {
                 <option value="completed">completed</option>
                 <option value="failed">failed</option>
               </select>
+              <label className={styles.pill} style={{ gap: "0.4rem", cursor: "default" }}>
+                <span>Min score:</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={scoreFilter}
+                  onChange={(e) => setScoreFilter(Number(e.target.value))}
+                  style={{ width: "80px", accentColor: "var(--accent)" }}
+                />
+                <span style={{ minWidth: "2.5rem", textAlign: "right" }}>
+                  {scoreFilter > 0 ? `${scoreFilter}%` : "off"}
+                </span>
+              </label>
               <button className={styles.btnSecondary} onClick={handleRefresh}>
                 Refresh
               </button>

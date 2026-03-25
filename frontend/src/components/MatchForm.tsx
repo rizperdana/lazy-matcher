@@ -4,13 +4,14 @@ import { useState, useCallback, FormEvent } from "react";
 import styles from "./MatchForm.module.css";
 
 interface Props {
-  onSubmit: (items: string[]) => void;
+  onSubmit: (items: string[], llmModel: string) => void;
   isSubmitting: boolean;
   error: string | null;
 }
 
 export function MatchForm({ onSubmit, isSubmitting, error }: Props) {
   const [text, setText] = useState("");
+  const [llmModel, setLlmModel] = useState("gemini");
 
   const validate = useCallback((input: string): { items: string[]; errors: string[] } => {
     const lines = input.split("\n");
@@ -46,7 +47,7 @@ export function MatchForm({ onSubmit, isSubmitting, error }: Props) {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (hasErrors || isSubmitting) return;
-    onSubmit(items);
+    onSubmit(items, llmModel);
     setText("");
   };
 
@@ -130,6 +131,21 @@ export function MatchForm({ onSubmit, isSubmitting, error }: Props) {
           <strong>Submission failed:</strong> {error}
         </div>
       )}
+
+      <div className={styles.field}>
+        <label htmlFor="llm-model">AI scoring model</label>
+        <select
+          id="llm-model"
+          className={styles.textarea}
+          value={llmModel}
+          onChange={(e) => setLlmModel(e.target.value)}
+          style={{ padding: "0.5rem", height: "auto" }}
+        >
+          <option value="gemini">Gemini (default)</option>
+          <option value="openrouter">OpenRouter</option>
+        </select>
+        <div className={styles.help}>Select which LLM provider to use for scoring.</div>
+      </div>
 
       <div className={styles.actions}>
         <button

@@ -102,6 +102,8 @@ class MatchJob(Base):
     missing_skills: Mapped[dict | list | None] = mapped_column(JSONB, default=list)
     recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_extraction: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    years_experience: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

@@ -21,6 +21,8 @@ export interface MatchJob {
   matched_skills: string[];
   missing_skills: string[];
   recommendation: string | null;
+  years_experience: number | null;
+  llm_model: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,12 +40,12 @@ export interface MatchJobListResponse {
   offset: number;
 }
 
-export async function submitBatch(items: string[]): Promise<MatchBatchResponse> {
+export async function submitBatch(items: string[], llmModel?: string): Promise<MatchBatchResponse> {
   const res = await fetch(`${API_BASE}/matches`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      items: items.map((content) => ({ content })),
+      items: items.map((content) => ({ content, ...(llmModel ? { llm_model: llmModel } : {}) })),
     }),
   });
   if (!res.ok) {

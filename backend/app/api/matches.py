@@ -61,6 +61,8 @@ def job_to_response(job: MatchJob) -> MatchJobResponse:
         if isinstance(job.missing_skills, list)
         else [],
         recommendation=job.recommendation,
+        years_experience=job.years_experience,
+        llm_model=job.llm_model,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -101,6 +103,7 @@ async def create_match_batch(
             source_hash=s_hash,
             title=content[:100] if src_type == "text" else content,
             status="pending",
+            llm_model=item.llm_model,
         )
         db.add(job)
         jobs.append(job)

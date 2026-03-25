@@ -21,6 +21,10 @@ class MatchItemInput(BaseModel):
         default=None,
         description="Explicit source type: 'text' or 'url'. Auto-detected if omitted.",
     )
+    llm_model: Optional[str] = Field(
+        default=None,
+        description="Preferred LLM model: 'gemini' or 'openrouter'. Uses config default if omitted.",
+    )
 
 
 class MatchBatchRequest(BaseModel):
@@ -67,6 +71,8 @@ class MatchJobResponse(BaseModel):
     matched_skills: Optional[list[str]] = None
     missing_skills: Optional[list[str]] = None
     recommendation: Optional[str] = None
+    years_experience: Optional[int] = None
+    llm_model: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

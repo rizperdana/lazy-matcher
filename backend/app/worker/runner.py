@@ -435,11 +435,13 @@ class MatchWorker:
                             "years_experience": years_exp,
                             "location": location_info,
                         },
+                        years_experience=int(years_exp) if years_exp else None,
+                        llm_model=job.llm_model,
                         finished_at=datetime.now(timezone.utc),
                         updated_at=datetime.now(timezone.utc),
                     )
                 )
-                await session.commit()
+            await session.commit()
 
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
@@ -492,6 +494,10 @@ class MatchWorker:
                         "years_experience": ext_data["years_exp"],
                         "location": ext_data["location"],
                     },
+                    years_experience=int(ext_data["years_exp"])
+                    if ext_data["years_exp"]
+                    else None,
+                    llm_model=job.llm_model,
                     finished_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc),
                 )

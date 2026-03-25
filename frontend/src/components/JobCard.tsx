@@ -49,23 +49,35 @@ export function JobCard({ job }: Props) {
         />
       </div>
 
-      {/* Scores (visible when completed) */}
-      {job.status === "completed" && job.score_overall !== null && (
-        <>
-          <div className={styles.stats}>
-            <div className={styles.mini}>
-              <div className={styles.k}>Overall</div>
-              <div className={styles.v}>{job.score_overall}%</div>
-            </div>
-            <div className={styles.mini}>
-              <div className={styles.k}>Skills</div>
-              <div className={styles.v}>{job.score_skills ?? "--"}%</div>
-            </div>
-            <div className={styles.mini}>
-              <div className={styles.k}>Experience</div>
-              <div className={styles.v}>{job.score_experience ?? "--"}%</div>
-            </div>
-          </div>
+          {/* Scores (visible when completed) */}
+          {job.status === "completed" && job.score_overall !== null && (
+            <>
+              <div className={styles.stats}>
+                <div className={styles.mini}>
+                  <div className={styles.k}>Overall</div>
+                  <div className={styles.v}>{job.score_overall}%</div>
+                </div>
+                <div className={styles.mini}>
+                  <div className={styles.k}>Skills</div>
+                  <div className={styles.v}>{job.score_skills ?? "--"}%</div>
+                </div>
+                <div className={styles.mini}>
+                  <div className={styles.k}>Experience</div>
+                  <div className={styles.v}>{job.score_experience ?? "--"}%</div>
+                </div>
+                {job.years_experience !== null && job.years_experience !== undefined && (
+                  <div className={styles.mini}>
+                    <div className={styles.k}>YoE</div>
+                    <div className={styles.v}>{job.years_experience}y</div>
+                  </div>
+                )}
+                {job.llm_model && (
+                  <div className={styles.mini}>
+                    <div className={styles.k}>Model</div>
+                    <div className={styles.v} style={{ fontSize: "0.7rem" }}>{job.llm_model}</div>
+                  </div>
+                )}
+              </div>
 
           {/* Matched skills */}
           {job.matched_skills.length > 0 && (

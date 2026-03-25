@@ -561,27 +561,196 @@ class MatchWorker:
         }
 
     async def _fetch_url_content(self, url: str) -> str:
-        """Fetch content from a URL. Returns text content."""
+        """Fetch content from a URL. Returns text content.
+
+        For job boards that embed JSON-LD structured data (Glints, Indeed, etc.),
+        extracts the JobPosting schema data for rich content extraction.
+        Falls back to BeautifulSoup text extraction for other sites.
+        """
         import httpx
+        import json
+        import re
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+            }
+            async with httpx.AsyncClient(
+                timeout=20.0, follow_redirects=True, headers=headers
+            ) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
 
                 if "html" in content_type:
+                    html = resp.text
+
+                    # --- Try JSON-LD extraction first (Glints, Indeed, etc.) ---
+                    json_ld_text = self._extract_json_ld_content(html)
+                    if json_ld_text:
+                        return json_ld_text
+
+                    # --- Fallback: BeautifulSoup text extraction ---
                     from bs4 import BeautifulSoup
 
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    # Remove script/style tags
+                    soup = BeautifulSoup(html, "html.parser")
                     for tag in soup(["script", "style"]):
                         tag.decompose()
-                    return soup.get_text(separator="\n", strip=True)
+                    return soup.get_text(separator="\n", strip=True)[:15000]
                 else:
                     return resp.text[:10000]
         except Exception as e:
             raise RuntimeError(f"Failed to fetch URL {url}: {e}")
+
+    @staticmethod
+    def _extract_json_ld_content(html: str) -> str | None:
+        """Extract job content from JSON-LD structured data in HTML.
+
+        Many job boards (Glints, Indeed, LinkedIn, etc.) embed JobPosting
+        schema.org structured data in <script type="application/ld+json"> tags.
+        This method extracts and formats that data for scoring.
+        """
+        import json
+        import re
+
+        # Find all JSON-LD script blocks
+        pattern = r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+        matches = re.findall(pattern, html, re.DOTALL | re.IGNORECASE)
+
+        for raw in matches:
+            try:
+                data = json.loads(raw.strip())
+            except json.JSONDecodeError:
+                continue
+
+            # Handle arrays of JSON-LD objects
+            items = data if isinstance(data, list) else [data]
+
+            for item in items:
+                if item.get("@type") != "JobPosting":
+                    continue
+
+                # Build rich text content from structured data
+                parts: list[str] = []
+
+                title = item.get("title", "")
+                if title:
+                    parts.append(f"Job Title: {title}")
+
+                # Description may contain HTML — strip tags
+                desc = item.get("description", "")
+                if desc:
+                    from bs4 import BeautifulSoup
+
+                    desc_soup = BeautifulSoup(desc, "html.parser")
+                    clean_desc = desc_soup.get_text(separator="\n", strip=True)
+                    parts.append(f"\nJob Description:\n{clean_desc}")
+
+                # Employment type
+                emp_type = item.get("employmentType", "")
+                if emp_type:
+                    type_map = {
+                        "FULL_TIME": "Full Time",
+                        "PART_TIME": "Part Time",
+                        "CONTRACTOR": "Contract",
+                        "TEMPORARY": "Temporary",
+                        "INTERN": "Internship",
+                        "VOLUNTEER": "Volunteer",
+                        "PER_DIEM": "Per Diem",
+                        "OTHER": "Other",
+                    }
+                    parts.append(f"Employment Type: {type_map.get(emp_type, emp_type)}")
+
+                # Experience requirements
+                exp = item.get("experienceRequirements", {})
+                if exp:
+                    months = exp.get("monthsOfExperience")
+                    if months:
+                        years = months / 12
+                        if years == int(years):
+                            parts.append(f"Experience Required: {int(years)} years")
+                        else:
+                            parts.append(f"Experience Required: {months} months")
+
+                # Skills
+                skills = item.get("skills", "")
+                if skills:
+                    parts.append(f"Required Skills: {skills}")
+
+                # Education
+                edu = item.get("educationRequirements", {})
+                if edu:
+                    credential = edu.get("credentialCategory", "")
+                    if credential:
+                        parts.append(f"Education: {credential}")
+
+                # Location
+                loc = item.get("jobLocation", {})
+                if loc:
+                    addr = loc.get("address", {})
+                    if addr:
+                        loc_parts = [
+                            addr.get("addressLocality", ""),
+                            addr.get("addressRegion", ""),
+                            addr.get("addressCountry", ""),
+                        ]
+                        loc_str = ", ".join(p for p in loc_parts if p)
+                        if loc_str:
+                            parts.append(f"Location: {loc_str}")
+
+                # Remote / telecommute
+                loc_type = item.get("jobLocationType", "")
+                if loc_type == "TELECOMMUTE":
+                    parts.append("Work Type: Remote / Work from Anywhere")
+
+                # Salary
+                salary = item.get("baseSalary", {})
+                if salary:
+                    val = salary.get("value", {})
+                    currency = salary.get("currency", "")
+                    unit = val.get("unitText", "")
+                    min_v = val.get("minValue")
+                    max_v = val.get("maxValue")
+                    if min_v is not None and max_v is not None:
+                        parts.append(
+                            f"Salary: {currency} {min_v:,.0f} - {max_v:,.0f} / {unit.lower()}"
+                        )
+                    elif min_v is not None:
+                        parts.append(
+                            f"Salary: {currency} {min_v:,.0f} / {unit.lower()}"
+                        )
+
+                # Company / hiring org
+                org = item.get("hiringOrganization", {})
+                if org:
+                    company = org.get("name", "")
+                    if company:
+                        parts.append(f"Company: {company}")
+                    overview = org.get("employerOverview", "")
+                    if overview:
+                        from bs4 import BeautifulSoup
+
+                        ov_soup = BeautifulSoup(overview, "html.parser")
+                        parts.append(
+                            f"Company Overview: {ov_soup.get_text(strip=True)}"
+                        )
+
+                # Industry
+                industry = item.get("industry", "")
+                if industry:
+                    parts.append(f"Industry: {industry}")
+
+                # Benefits
+                benefits = item.get("jobBenefits", "")
+                if benefits:
+                    parts.append(f"Benefits: {benefits}")
+
+                if len(parts) >= 2:  # Must have at least title + something
+                    return "\n".join(parts)
+
+        return None
 
 
 async def main():

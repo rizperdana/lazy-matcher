@@ -8,11 +8,23 @@ class Settings(BaseSettings):
     """App settings. All values can be overridden via environment variables."""
 
     DATABASE_URL: str = (
-        "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/lazy_matcher"
+        "postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/lazy_matcher"
     )
     DATABASE_URL_SYNC: str = (
-        "postgresql://postgres:postgres@127.0.0.1:5432/lazy_matcher"
+        "postgresql://postgres:postgres@127.0.0.1:54322/lazy_matcher"
     )
+
+    # Upstash Redis
+    UPSTASH_REDIS_URL: str = ""
+    UPSTASH_REDIS_TOKEN: str = ""
+
+    # LLM Scoring
+    GEMINI_AI_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    OPENROUTER_KEY: str = ""
+    OPENROUTER_MODEL: str = "stepfun/step-3.5-flash:free"
+    USE_LLM_SCORING: bool = True
+    LLM_BATCH_SIZE: int = 5  # Max jobs per LLM call for batch scoring
 
     # Worker
     WORKER_POLL_INTERVAL: float = 2.0

@@ -17,6 +17,9 @@ build/
 # Database
 .pgdata/
 
+# Build output
+.vercel/
+
 # Node
 node_modules/
 .next/

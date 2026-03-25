@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.matches import router as matches_router
+from app.services.cache import cache_stats
 
 settings = get_settings()
 
@@ -27,4 +28,4 @@ app.include_router(matches_router, prefix=settings.API_PREFIX)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "cache": cache_stats()}

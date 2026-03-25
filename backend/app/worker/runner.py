@@ -29,7 +29,10 @@ from app.services.scoring import (
     extract_location_info,
     extract_title,
     compute_scores,
+    source_hash,
 )
+from app.services.cache import get_cached_score, set_cached_score
+from app.services.llm_scoring import get_llm_scorer
 
 # Configure logging
 logging.basicConfig(
@@ -86,21 +89,33 @@ class MatchWorker:
         self._running = False
 
     async def _poll_once(self) -> bool:
-        """Claim and process one job. Returns True if a job was processed."""
-        async with self.Session() as session:
-            job = await self._claim_job(session)
-            if not job:
-                return False
+        """Claim and process jobs. Returns True if any jobs were processed."""
+        batch_size = (
+            self.settings.LLM_BATCH_SIZE if self.settings.USE_LLM_SCORING else 1
+        )
 
-        # Process outside the claiming transaction
-        await self._process_job(job)
+        async with self.Session() as session:
+            jobs = await self._claim_jobs(session, batch_size)
+
+        if not jobs:
+            return False
+
+        if self.settings.USE_LLM_SCORING and len(jobs) > 1:
+            # Batch process with LLM
+            await self._process_job_batch(jobs)
+        else:
+            # Process individually
+            for job in jobs:
+                await self._process_job(job)
+
         return True
 
-    async def _claim_job(self, session: AsyncSession) -> MatchJob | None:
-        """Atomically claim one pending job using FOR UPDATE SKIP LOCKED."""
+    async def _claim_jobs(
+        self, session: AsyncSession, batch_size: int
+    ) -> list[MatchJob]:
+        """Claim up to batch_size pending jobs using FOR UPDATE SKIP LOCKED."""
         now = datetime.now(timezone.utc)
 
-        # Use raw SQL for the atomic claim operation
         result = await session.execute(
             text("""
                 UPDATE match_jobs
@@ -110,36 +125,138 @@ class MatchWorker:
                     started_at = :now,
                     attempt_count = attempt_count + 1,
                     updated_at = :now
-                WHERE id = (
+                WHERE id IN (
                     SELECT id FROM match_jobs
                     WHERE status = 'pending'
                       AND attempt_count < max_attempts
                     ORDER BY queued_at ASC
                     FOR UPDATE SKIP LOCKED
-                    LIMIT 1
+                    LIMIT :batch_size
                 )
                 RETURNING id
             """),
-            {"worker_id": self.worker_id, "now": now},
+            {"worker_id": self.worker_id, "now": now, "batch_size": batch_size},
         )
 
-        row = result.fetchone()
-        if not row:
-            return None
+        rows = result.fetchall()
+        if not rows:
+            return []
 
         await session.commit()
 
-        # Fetch the full job
+        # Fetch the full jobs
+        job_ids = [row[0] for row in rows]
         job_result = await session.execute(
-            select(MatchJob).where(MatchJob.id == row[0])
+            select(MatchJob).where(MatchJob.id.in_(job_ids))
         )
-        job = job_result.scalar_one()
+        jobs = job_result.scalars().all()
 
-        logger.info(
-            f"[{self.worker_id}] Claimed job {job.id} "
-            f"(attempt {job.attempt_count}/{job.max_attempts}, batch={job.batch_id})"
-        )
-        return job
+        for job in jobs:
+            logger.info(
+                f"[{self.worker_id}] Claimed job {job.id} "
+                f"(attempt {job.attempt_count}/{job.max_attempts})"
+            )
+
+        return list(jobs)
+
+    async def _process_job_batch(self, jobs: list[MatchJob]):
+        """Process a batch of jobs with LLM scoring."""
+        from app.services.llm_scoring import get_llm_scorer
+
+        scorer = get_llm_scorer()
+
+        # Load candidate profiles and extract data for all jobs
+        job_data = []
+        profiles = []
+        extracted_data = []
+
+        for job in jobs:
+            try:
+                async with self.Session() as session:
+                    profile_data = await self._load_candidate_profile(
+                        session, job.candidate_id
+                    )
+
+                text_content = job.source_value
+                if job.source_type == "url":
+                    text_content = await self._fetch_url_content(job.source_value)
+
+                extracted_skills = extract_skills(text_content)
+                seniority = extract_seniority(text_content)
+                years_exp = extract_years_experience(text_content)
+                location_info = extract_location_info(text_content)
+                title = extract_title(text_content)
+
+                job_data.append(
+                    {
+                        "title": title,
+                        "content": text_content,
+                    }
+                )
+                profiles.append(profile_data)
+                extracted_data.append(
+                    {
+                        "skills": extracted_skills,
+                        "seniority": seniority,
+                        "years_exp": years_exp,
+                        "location": location_info,
+                        "title": title,
+                    }
+                )
+            except Exception as e:
+                logger.error(f"[{self.worker_id}] Failed to prepare job {job.id}: {e}")
+
+        if not job_data:
+            return
+
+        # Use the first profile for batch scoring (assume same candidate for batch)
+        first_profile = profiles[0]
+
+        # Check cache first for each job
+        scores_list = []
+        jobs_needing_scoring = []
+        jobs_needing_scoring_indices = []
+
+        for i, (job, ext_data) in enumerate(zip(jobs, extracted_data)):
+            src_hash = source_hash(job.source_value)
+            cached = get_cached_score(src_hash, str(job.candidate_id))
+            if cached:
+                scores_list.append(cached)
+                logger.info(f"[{self.worker_id}] Cache hit for job {job.id}")
+            else:
+                scores_list.append(None)
+                jobs_needing_scoring.append(job_data[i])
+                jobs_needing_scoring_indices.append(i)
+
+        # Score jobs that aren't cached
+        if jobs_needing_scoring:
+            try:
+                llm_scores = await scorer.score_batch(
+                    jobs=jobs_needing_scoring,
+                    candidate_skills=first_profile["skills"],
+                    candidate_years=first_profile["years_experience"],
+                    candidate_locations=first_profile["locations"],
+                    remote_preference=first_profile["remote_preference"],
+                    weight_skills=self.settings.WEIGHT_SKILLS,
+                    weight_experience=self.settings.WEIGHT_EXPERIENCE,
+                    weight_location=self.settings.WEIGHT_LOCATION,
+                )
+
+                # Fill in scores
+                for idx, score in zip(jobs_needing_scoring_indices, llm_scores):
+                    scores_list[idx] = score
+                    src_hash = source_hash(jobs[idx].source_value)
+                    set_cached_score(src_hash, str(jobs[idx].candidate_id), score)
+            except Exception as e:
+                logger.error(f"[{self.worker_id}] Batch scoring failed: {e}")
+
+        # Persist all results
+        for job, scores, ext_data in zip(jobs, scores_list, extracted_data):
+            if scores:
+                await self._persist_job_result(job, scores, ext_data)
+            else:
+                # Mark as failed if no scores available
+                await self._mark_job_failed(job, "No scores generated")
 
     async def _process_job(self, job: MatchJob):
         """Process a claimed job: extract data and compute scores."""
@@ -164,20 +281,46 @@ class MatchWorker:
             location_info = extract_location_info(text_content)
             title = extract_title(text_content)
 
-            # Compute scores
-            scores = compute_scores(
-                job_skills=extracted_skills,
-                job_seniority=seniority,
-                job_years_exp=years_exp,
-                job_location=location_info,
-                candidate_skills=profile_data["skills"],
-                candidate_years=profile_data["years_experience"],
-                candidate_locations=profile_data["locations"],
-                candidate_remote_pref=profile_data["remote_preference"],
-                weight_skills=self.settings.WEIGHT_SKILLS,
-                weight_experience=self.settings.WEIGHT_EXPERIENCE,
-                weight_location=self.settings.WEIGHT_LOCATION,
-            )
+            # Check cache first (keyed by source hash + candidate)
+            src_hash = source_hash(text_content)
+            cached = get_cached_score(src_hash, str(job.candidate_id))
+
+            if cached:
+                scores = cached
+                logger.info(f"[{self.worker_id}] Cache hit for job {job_id}")
+            elif self.settings.USE_LLM_SCORING:
+                # Try LLM scoring with deterministic fallback
+                from app.services.llm_scoring import get_llm_scorer
+
+                scorer = get_llm_scorer()
+                scores = await scorer.score_single(
+                    job_content=text_content,
+                    job_title=title,
+                    candidate_skills=profile_data["skills"],
+                    candidate_years=profile_data["years_experience"],
+                    candidate_locations=profile_data["locations"],
+                    remote_preference=profile_data["remote_preference"],
+                    weight_skills=self.settings.WEIGHT_SKILLS,
+                    weight_experience=self.settings.WEIGHT_EXPERIENCE,
+                    weight_location=self.settings.WEIGHT_LOCATION,
+                )
+                set_cached_score(src_hash, str(job.candidate_id), scores)
+            else:
+                # Pure deterministic scoring
+                scores = compute_scores(
+                    job_skills=extracted_skills,
+                    job_seniority=seniority,
+                    job_years_exp=years_exp,
+                    job_location=location_info,
+                    candidate_skills=profile_data["skills"],
+                    candidate_years=profile_data["years_experience"],
+                    candidate_locations=profile_data["locations"],
+                    candidate_remote_pref=profile_data["remote_preference"],
+                    weight_skills=self.settings.WEIGHT_SKILLS,
+                    weight_experience=self.settings.WEIGHT_EXPERIENCE,
+                    weight_location=self.settings.WEIGHT_LOCATION,
+                )
+                set_cached_score(src_hash, str(job.candidate_id), scores)
 
             # Persist results
             async with self.Session() as session:
@@ -234,6 +377,57 @@ class MatchWorker:
                     )
                 )
                 await session.commit()
+
+    async def _persist_job_result(self, job: MatchJob, scores: dict, ext_data: dict):
+        """Persist scoring results for a job."""
+        async with self.Session() as session:
+            await session.execute(
+                update(MatchJob)
+                .where(MatchJob.id == job.id)
+                .values(
+                    status="completed",
+                    title=ext_data["title"],
+                    score_overall=scores["score_overall"],
+                    score_skills=scores["score_skills"],
+                    score_experience=scores["score_experience"],
+                    score_location=scores["score_location"],
+                    matched_skills=scores["matched_skills"],
+                    missing_skills=scores["missing_skills"],
+                    recommendation=scores["recommendation"],
+                    raw_extraction={
+                        "skills": ext_data["skills"],
+                        "seniority": ext_data["seniority"],
+                        "years_experience": ext_data["years_exp"],
+                        "location": ext_data["location"],
+                    },
+                    finished_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.commit()
+
+        logger.info(
+            f"[{self.worker_id}] Completed job {job.id} "
+            f"(score={scores['score_overall']})"
+        )
+
+    async def _mark_job_failed(self, job: MatchJob, error_msg: str):
+        """Mark a job as failed."""
+        async with self.Session() as session:
+            await session.execute(
+                update(MatchJob)
+                .where(MatchJob.id == job.id)
+                .values(
+                    status="failed",
+                    error_code="ScoringError",
+                    error_message=error_msg[:500],
+                    finished_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.commit()
+
+        logger.error(f"[{self.worker_id}] Failed job {job.id}: {error_msg}")
 
     async def _load_candidate_profile(
         self, session: AsyncSession, candidate_id

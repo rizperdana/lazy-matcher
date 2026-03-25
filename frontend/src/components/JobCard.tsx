@@ -70,12 +70,10 @@ export function JobCard({ job }: Props) {
                     )}
                   </div>
                 </div>
-                {job.llm_model && (
-                  <div className={styles.mini}>
-                    <div className={styles.k}>Model</div>
-                    <div className={styles.v} style={{ fontSize: "0.7rem" }}>{job.llm_model}</div>
-                  </div>
-                )}
+                <div className={styles.mini}>
+                  <div className={styles.k}>Location</div>
+                  <div className={styles.v}>{job.score_location ?? "--"}%</div>
+                </div>
               </div>
 
           {/* Matched skills */}

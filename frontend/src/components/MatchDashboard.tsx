@@ -14,7 +14,7 @@ function formatTime(date: Date): string {
 
 export function MatchDashboard() {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("completed"); // Default to completed for scoring
   const [scoreFilter, setScoreFilter] = useState<number>(0);
   const [yearFilter, setYearFilter] = useState<number>(0);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -55,9 +55,13 @@ export function MatchDashboard() {
   }, [queryClient]);
 
   const jobs = (data?.items ?? []).filter((j) => {
-    if (j.status !== "completed") return true;
-    if (scoreFilter > 0 && (j.score_overall ?? 0) < scoreFilter) return false;
-    if (yearFilter > 0 && (j.years_experience ?? 0) < yearFilter) return false;
+    // Always apply status filter first
+    if (statusFilter && j.status !== statusFilter) return false;
+    // Score and YoE filters only apply to completed jobs
+    if (j.status === "completed") {
+      if (scoreFilter > 0 && (j.score_overall ?? 0) < scoreFilter) return false;
+      if (yearFilter > 0 && (j.years_experience ?? 0) < yearFilter) return false;
+    }
     return true;
   });
 
@@ -123,7 +127,7 @@ export function MatchDashboard() {
             <div>
               <h2>Results</h2>
               <p>
-                Overall = Skills 50% + Experience 30% + Location 20% • Last refreshed: {lastRefresh ? formatTime(lastRefresh) : "—"} • {data?.total ?? 0} total
+                Last refreshed: {lastRefresh ? formatTime(lastRefresh) : "—"} • {data?.total ?? 0} total
               </p>
             </div>
             <div className={styles.row}>
@@ -133,46 +137,58 @@ export function MatchDashboard() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 aria-label="Status filter"
               >
+                <option value="completed">Completed only</option>
+                <option value="pending">Pending</option>
+                <option value="processing">Processing</option>
+                <option value="failed">Failed</option>
                 <option value="">All statuses</option>
-                <option value="pending">pending</option>
-                <option value="processing">processing</option>
-                <option value="completed">completed</option>
-                <option value="failed">failed</option>
               </select>
               <label className={styles.pill} style={{ gap: "0.4rem", cursor: "default" }}>
-                <span>Min score:</span>
+                <span>Min score %:</span>
                 <input
-                  type="range"
+                  type="number"
                   min={0}
                   max={100}
-                  step={5}
-                  value={scoreFilter}
-                  onChange={(e) => setScoreFilter(Number(e.target.value))}
-                  style={{ width: "80px", accentColor: "var(--accent)" }}
+                  value={scoreFilter || ""}
+                  onChange={(e) => setScoreFilter(e.target.value ? Number(e.target.value) : 0)}
+                  placeholder="0"
+                  className={styles.textInput}
                 />
-                <span style={{ minWidth: "2.5rem", textAlign: "right" }}>
-                  {scoreFilter > 0 ? `${scoreFilter}%` : "off"}
-                </span>
               </label>
               <label className={styles.pill} style={{ gap: "0.4rem", cursor: "default" }}>
                 <span>Min YoE:</span>
                 <input
-                  type="range"
+                  type="number"
                   min={0}
-                  max={15}
-                  step={1}
-                  value={yearFilter}
-                  onChange={(e) => setYearFilter(Number(e.target.value))}
-                  style={{ width: "80px", accentColor: "var(--accent)" }}
+                  max={30}
+                  value={yearFilter || ""}
+                  onChange={(e) => setYearFilter(e.target.value ? Number(e.target.value) : 0)}
+                  placeholder="0"
+                  className={styles.textInput}
                 />
-                <span style={{ minWidth: "2.5rem", textAlign: "right" }}>
-                  {yearFilter > 0 ? `${yearFilter}y` : "off"}
-                </span>
               </label>
               <button className={styles.btnSecondary} onClick={handleRefresh}>
                 Refresh
               </button>
             </div>
+          </div>
+
+          {/* Scoring Methodology Info */}
+          <div className={styles.infoBox}>
+            <details>
+              <summary className={styles.infoSummary}>
+                <span>How scores are calculated</span>
+              </summary>
+              <div className={styles.infoContent}>
+                <p><strong>Overall Score = Skills 50% + Experience 30% + Location 20%</strong></p>
+                <ul>
+                  <li><strong>Skills (50%):</strong> Percentage of required technical skills found in the job description. Higher is better — more matching skills means stronger candidate fit.</li>
+                  <li><strong>Experience (30%):</strong> Years of experience required by the job. Score is based on how well the candidate's experience matches (70-100% for 5+ years, lower for junior roles).</li>
+                  <li><strong>Location (20%):</strong> Location preference match. Remote = 100%, Hybrid = 80%, On-site in candidate's area = 70%, Other = 50-60%.</li>
+                </ul>
+                <p className={styles.muted}>Scores are computed by AI (Gemini or OpenRouter) based on job description analysis. Filter by Min score % to find best matches.</p>
+              </div>
+            </details>
           </div>
           <div className={styles.cardBody}>
             {isError && (

@@ -7,7 +7,7 @@ Async job matching pipeline. Submits 1–10 job descriptions, scores them agains
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Next.js UI  │────▶│  FastAPI API  │────▶│  PostgreSQL  │
-│  (Vercel)    │     │  (Render)    │     │  (Supabase)  │
+│  (Vercel)    │     │  (Render)    │     │  (Neon)      │
 └─────────────┘     └──────┬───────┘     └──────────────┘
                            │
                      ┌──────▼───────┐
@@ -21,18 +21,56 @@ Async job matching pipeline. Submits 1–10 job descriptions, scores them agains
                      │  Gemini API  │
                      │  (OpenRouter │
                      │   fallback)  │
+                     └──────┬───────┘
+                            │
+                     ┌──────▼───────┐
+                     │ Upstash Redis│
+                     │ (queue/cache)│
                      └──────────────┘
 ```
 
 ## Quick Start
 
-### Prerequisites
+### Option 1: Docker Compose (Recommended)
+
+Requires [Docker](https://docs.docker.com/get-docker/) and Docker Compose.
+
+```bash
+# Create .env with your credentials
+cat > .env << 'EOF'
+DATABASE_URL=postgresql+asyncpg://your-neon-connection-string
+UPSTASH_REDIS_REST_URL=https://your-instance.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your-upstash-token
+GEMINI_AI_KEY=your-gemini-key
+OPENROUTER_KEY=your-openrouter-key
+EOF
+
+# Build and start all services
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+
+# Stop all services
+docker compose down
+```
+
+Services started:
+- **API** — http://localhost:8000 (FastAPI + Alembic migrations + seed)
+- **Worker 1** — processes jobs from Redis queue
+- **Worker 2** — second worker for parallelism
+- **Frontend** — http://localhost:3000 (Next.js with API proxy)
+
+### Option 2: Local Development
+
+#### Prerequisites
 
 - Python 3.11+ (3.14 requires `PYTHON_GIL=0`)
 - Node.js 18+
-- Supabase CLI (for local PostgreSQL)
+- Neon PostgreSQL account
+- Upstash Redis account
 
-### Backend
+#### Backend
 
 ```bash
 cd backend
@@ -43,12 +81,12 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 pip install psycopg2-binary
 
-# Start Supabase (from titipsapa project)
-supabase start
+# Set DATABASE_URL (Neon connection string)
+export DATABASE_URL="postgresql+asyncpg://user:pass@ep-xxx-pooler.neon.tech/db?ssl=require"
+export DATABASE_URL_SYNC="postgresql://user:pass@ep-xxx-pooler.neon.tech/db?sslmode=require"
 
 # Run migrations
-DATABASE_URL_SYNC="postgresql://postgres:postgres@127.0.0.1:54322/lazy_matcher" \
-  alembic upgrade head
+alembic upgrade head
 
 # Seed candidate data
 python -m app.db.seed
@@ -63,7 +101,7 @@ PYTHON_GIL=0 uvicorn app.main:app --host 0.0.0.0 --port 8000
 PYTHON_GIL=0 python -m app.worker.runner
 ```
 
-### Frontend
+#### Frontend
 
 ```bash
 cd frontend
@@ -145,13 +183,14 @@ Health check with cache status.
 
 The `render.yaml` blueprint deploys:
 - API service (uvicorn)
-- Worker service (polls PostgreSQL for jobs)
+- Worker service (polls PostgreSQL + Redis queue for jobs)
 
 **Required environment variables:**
-- `DATABASE_URL` — Supabase connection string
+- `DATABASE_URL` — Neon PostgreSQL connection string (asyncpg)
+- `DATABASE_URL_SYNC` — Neon PostgreSQL connection string (psycopg2, for Alembic)
 - `GEMINI_AI_KEY` — Google Gemini API key
 - `OPENROUTER_KEY` — OpenRouter fallback key
-- `UPSTASH_REDIS_URL` / `UPSTASH_REDIS_TOKEN` — Score caching
+- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` — Upstash Redis for job queue
 
 ### Frontend (Vercel)
 
@@ -174,11 +213,11 @@ Uses relative API URLs (`/api/v1/*`) with Next.js rewrites to backend.
 ## Testing
 
 ```bash
-# Backend integration tests
+# Backend integration tests (against Neon)
 cd backend
 PYTHON_GIL=0 pytest tests/test_matches.py -v
 
-# Frontend Playwright tests
+# Frontend Playwright tests (needs backend running)
 cd frontend
 npx playwright test
 ```

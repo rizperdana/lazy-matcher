@@ -441,7 +441,7 @@ class MatchWorker:
                         updated_at=datetime.now(timezone.utc),
                     )
                 )
-            await session.commit()
+                await session.commit()
 
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(

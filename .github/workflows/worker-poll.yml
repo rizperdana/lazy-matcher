@@ -1,0 +1,17 @@
+name: Worker Poll
+
+on:
+  schedule:
+    - cron: "*/5 * * * *" # Every 5 minutes
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger worker poll
+        run: |
+          curl -sf -X POST \
+            "https://lazy-matcher-perdanarizki5863-wonknjgm.leapcell.dev/api/v1/matches/worker/poll" \
+            -H "Content-Type: application/json" \
+            || echo "Worker poll failed (may be cold start)"

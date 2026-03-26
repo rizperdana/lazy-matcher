@@ -30,7 +30,10 @@ class Settings(BaseSettings):
 
     # API
     API_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:3000",
+        "https://lazy-matcher-perdanarizki5863-wonknjgm.leapcell.dev",
+    ]
 
     # Scoring weights (must sum to 1.0)
     WEIGHT_SKILLS: float = 0.5

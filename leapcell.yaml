@@ -1,4 +1,8 @@
 runtime: python
 build: pip install --no-cache-dir .
-start: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080
+start: >
+  sh -c "alembic upgrade head &&
+         python -m app.db.seed &&
+         python -m app.worker.runner --worker-id leapcell-worker --poll-interval 5 &
+         uvicorn app.main:app --host 0.0.0.0 --port 8080"
 port: 8080

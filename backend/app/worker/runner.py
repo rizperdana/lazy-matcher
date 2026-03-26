@@ -641,8 +641,10 @@ class MatchWorker:
     async def _fetch_url_content(self, url: str) -> str:
         """Fetch content from a URL. Returns text content.
 
-        Uses cloudscraper (bypasses Cloudflare/bot protection) as primary method,
-        falls back to httpx for sites that don't need it.
+        Tries 3 methods in order:
+        1. curl subprocess (system TLS, bypasses most bot protection)
+        2. cloudscraper (bypasses Cloudflare JS challenges)
+        3. httpx (async fallback with browser headers)
         For job boards that embed JSON-LD structured data (Glints, Indeed, etc.),
         extracts the JobPosting schema data for rich content extraction.
         Falls back to BeautifulSoup text extraction for other sites.
@@ -653,19 +655,58 @@ class MatchWorker:
 
         self._validate_url_safety(url)
 
-        # --- Method 1: cloudscraper (bypasses bot protection) ---
+        # --- Method 1: curl subprocess (bypasses bot protection via system TLS) ---
+        try:
+            html = await asyncio.to_thread(self._fetch_with_curl, url)
+            return self._parse_html_content(html)
+        except Exception as curl_err:
+            logger.debug(f"curl failed for {url}: {curl_err}")
+
+        # --- Method 2: cloudscraper (bypasses Cloudflare JS challenges) ---
         try:
             html = await asyncio.to_thread(self._fetch_with_cloudscraper, url)
             return self._parse_html_content(html)
         except Exception as cloud_err:
             logger.debug(f"cloudscraper failed for {url}: {cloud_err}")
 
-        # --- Method 2: httpx fallback ---
+        # --- Method 3: httpx fallback ---
         try:
             html = await self._fetch_with_httpx(url)
             return self._parse_html_content(html)
         except Exception as httpx_err:
             raise RuntimeError(f"Failed to fetch URL {url}: {httpx_err}")
+
+    @staticmethod
+    def _fetch_with_curl(url: str) -> str:
+        """Synchronous fetch using curl subprocess (bypasses bot protection via system TLS)."""
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "curl",
+                "-s",
+                "-L",
+                "--max-time",
+                "20",
+                "-H",
+                "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "-H",
+                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "-H",
+                "Accept-Language: en-US,en;q=0.9,id;q=0.8",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"curl exited with code {result.returncode}: {result.stderr[:200]}"
+            )
+        if not result.stdout.strip():
+            raise RuntimeError("curl returned empty response")
+        return result.stdout
 
     @staticmethod
     def _fetch_with_cloudscraper(url: str) -> str:

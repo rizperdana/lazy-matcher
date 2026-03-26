@@ -4,8 +4,8 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select, func, update
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -70,13 +70,14 @@ def job_to_response(job: MatchJob) -> MatchJobResponse:
 @router.post("", response_model=MatchBatchResponse, status_code=201)
 async def create_match_batch(
     body: MatchBatchRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a batch of 1-10 job descriptions for scoring.
 
-    Returns immediately with pending jobs. Worker processes them in the background.
+    Processes jobs inline — no external worker/cron needed.
     """
+    from app.worker.runner import MatchWorker
+
     candidate_id = await get_default_candidate(db)
 
     # Create batch
@@ -114,13 +115,26 @@ async def create_match_batch(
     for job in jobs:
         await db.refresh(job)
 
-    # Trigger worker in background — no cron/Redis needed
-    background_tasks.add_task(_process_jobs_background)
+    # Process jobs inline — keeps request alive so Leapcell doesn't kill it
+    worker = MatchWorker(worker_id="inline-trigger")
+    try:
+        await worker._poll_once()
+    except Exception as e:
+        import logging
+        logging.getLogger("worker").error(f"Inline worker error: {e}")
+    finally:
+        await worker.engine.dispose()
+
+    # Re-fetch jobs with updated status/scores
+    refreshed = []
+    for job in jobs:
+        await db.refresh(job)
+        refreshed.append(job_to_response(job))
 
     return MatchBatchResponse(
         batch_id=batch.id,
-        job_count=len(jobs),
-        jobs=[job_to_response(j) for j in jobs],
+        job_count=len(refreshed),
+        jobs=refreshed,
     )
 
 
@@ -182,35 +196,3 @@ async def list_match_jobs(
         limit=limit,
         offset=offset,
     )
-
-
-@router.post("/worker/poll")
-@router.get("/worker/poll")  # Support GET for cron services
-async def trigger_worker_poll():
-    """Trigger one worker poll cycle. Call via external cron every 30s.
-
-    This replaces the long-running background worker for Leapcell Serverless.
-    Supports both GET and POST.
-    """
-    from app.worker.runner import MatchWorker
-
-    worker = MatchWorker(worker_id="http-trigger")
-    try:
-        processed = await worker._poll_once()
-        return {"processed": processed, "worker_id": worker.worker_id}
-    finally:
-        await worker.engine.dispose()
-
-
-async def _process_jobs_background():
-    """Background task: process pending jobs immediately after submission."""
-    from app.worker.runner import MatchWorker
-
-    worker = MatchWorker(worker_id="inline-trigger")
-    try:
-        await worker._poll_once()
-    except Exception as e:
-        import logging
-        logging.getLogger("worker").error(f"Background worker error: {e}")
-    finally:
-        await worker.engine.dispose()

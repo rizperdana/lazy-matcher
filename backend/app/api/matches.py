@@ -116,9 +116,28 @@ async def create_match_batch(
         await db.refresh(job)
 
     # Process jobs inline — keeps request alive so Leapcell doesn't kill it
+    from app.worker.runner import MatchWorker
+
     worker = MatchWorker(worker_id="inline-trigger")
     try:
-        await worker._poll_once()
+        # Reset any stuck "processing" jobs from previous killed requests
+        async with worker.Session() as session:
+            from sqlalchemy import text
+            from datetime import datetime, timezone, timedelta
+            await session.execute(
+                text("""
+                    UPDATE match_jobs
+                    SET status = 'pending', locked_by = NULL, locked_at = NULL
+                    WHERE status = 'processing'
+                      AND locked_at < :stale_time
+                """),
+                {"stale_time": datetime.now(timezone.utc) - timedelta(minutes=2)},
+            )
+            await session.commit()
+
+        # Process each job directly (no claim step — if killed, stays "pending")
+        for job in jobs:
+            await worker._process_job(job)
     except Exception as e:
         import logging
         logging.getLogger("worker").error(f"Inline worker error: {e}")

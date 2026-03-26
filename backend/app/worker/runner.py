@@ -583,7 +583,11 @@ class MatchWorker:
 
         # Block known sensitive hostnames
         blocked_hosts = {
-            "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::]",
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "::1",
+            "[::]",
             "metadata.google.internal",
         }
         if hostname.lower() in blocked_hosts:
@@ -592,7 +596,9 @@ class MatchWorker:
         # Block cloud metadata IPs explicitly (before DNS resolution)
         metadata_ips = {"169.254.169.254", "169.254.170.2"}
         if hostname in metadata_ips:
-            raise ValueError(f"Rejected URL: cloud metadata endpoint '{hostname}' is blocked")
+            raise ValueError(
+                f"Rejected URL: cloud metadata endpoint '{hostname}' is blocked"
+            )
 
         # Resolve hostname and check for private IP ranges
         try:
@@ -621,8 +627,19 @@ class MatchWorker:
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"macOS"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+                "Referer": "https://www.google.com/",
             }
             async with httpx.AsyncClient(
                 timeout=20.0, follow_redirects=True, headers=headers
@@ -648,6 +665,14 @@ class MatchWorker:
                     return soup.get_text(separator="\n", strip=True)[:15000]
                 else:
                     return resp.text[:10000]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                raise RuntimeError(
+                    f"Access denied (403) fetching {url}. "
+                    f"This site may block requests from cloud servers. "
+                    f"Try pasting the job description text directly instead."
+                )
+            raise RuntimeError(f"Failed to fetch URL {url}: {e}")
         except Exception as e:
             raise RuntimeError(f"Failed to fetch URL {url}: {e}")
 

@@ -1,32 +1,31 @@
 # lazy-matcher
 
-Async job matching pipeline. Submits 1–10 job descriptions, scores them against a stored candidate profile in PostgreSQL, and shows results via a polling React frontend.
+Async job matching pipeline. Submits 1–10 job descriptions (text or URL), scores them against a stored candidate profile in PostgreSQL, and shows results via a polling React frontend.
+
+Supports **URL extraction** — paste a job board link (Glints, Indeed, etc.) and the system auto-extracts structured job data via JSON-LD.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Next.js UI  │────▶│  FastAPI API  │────▶│  PostgreSQL  │
-│  (Vercel)    │     │  (Render)    │     │  (Neon)      │
-└─────────────┘     └──────┬───────┘     └──────────────┘
-                           │
-                     ┌──────▼───────┐
-                     │  Worker(s)   │
-                     │ FOR UPDATE   │
-                     │ SKIP LOCKED  │
-                     └──────┬───────┘
-                            │
-                     ┌──────▼───────┐
-                     │  LLM Scoring │
-                     │  Gemini API  │
-                     │  (OpenRouter │
-                     │   fallback)  │
-                     └──────┬───────┘
-                            │
-                     ┌──────▼───────┐
-                     │ Upstash Redis│
-                     │ (queue/cache)│
-                     └──────────────┘
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   Next.js UI    │────▶│   FastAPI API    │────▶│   PostgreSQL     │
+│  (port 3000)    │     │  (port 8000)     │     │  (Neon)          │
+└─────────────────┘     └──────┬───────────┘     └──────────────────┘
+                               │
+                         ┌──────▼───────────┐
+                         │   Worker(s)      │
+                         │  SELECT FOR UPDATE
+                         │  SKIP LOCKED     │
+                         └──────┬───────────┘
+                                │
+                  ┌─────────────┼─────────────┐
+                  │             │             │
+           ┌──────▼─────┐ ┌────▼────┐ ┌──────▼──────┐
+           │Redis Queue │ │  Gemini │ │ Deterministic│
+           │(Upstash)   │ │ Primary │ │  Fallback   │
+           └────────────┘ │ + OpenR │ └─────────────┘
+                          │ fallback│
+                          └─────────┘
 ```
 
 ## Quick Start
@@ -38,7 +37,7 @@ Requires [Docker](https://docs.docker.com/get-docker/) and Docker Compose.
 ```bash
 # Create .env with your credentials
 cat > .env << 'EOF'
-DATABASE_URL=postgresql+asyncpg://your-neon-connection-string
+DATABASE_URL=postgresql://neondb_owner:password@ep-xxx-pooler.neon.tech/neondb?ssl=require
 UPSTASH_REDIS_REST_URL=https://your-instance.upstash.io
 UPSTASH_REDIS_REST_TOKEN=your-upstash-token
 GEMINI_AI_KEY=your-gemini-key
@@ -57,7 +56,7 @@ docker compose down
 
 Services started:
 - **API** — http://localhost:8000 (FastAPI + Alembic migrations + seed)
-- **Worker 1** — processes jobs from Redis queue
+- **Worker 1** — processes jobs from Redis queue + DB polling
 - **Worker 2** — second worker for parallelism
 - **Frontend** — http://localhost:3000 (Next.js with API proxy)
 
@@ -81,9 +80,12 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 pip install psycopg2-binary
 
-# Set DATABASE_URL (Neon connection string)
-export DATABASE_URL="postgresql+asyncpg://user:pass@ep-xxx-pooler.neon.tech/db?ssl=require"
-export DATABASE_URL_SYNC="postgresql://user:pass@ep-xxx-pooler.neon.tech/db?sslmode=require"
+# Set DATABASE_URL — use plain postgresql:// (auto-converted to asyncpg)
+export DATABASE_URL="postgresql://user:pass@ep-xxx-pooler.neon.tech/db?ssl=require"
+
+# DATABASE_URL_SYNC is auto-derived from DATABASE_URL if not set
+# Override if needed (for Alembic migrations):
+export DATABASE_URL_SYNC="postgresql://user:pass@ep-xxx-pooler.neon.tech/db?ssl=require"
 
 # Run migrations
 alembic upgrade head
@@ -98,7 +100,8 @@ PYTHON_GIL=0 pytest tests/test_matches.py -v
 PYTHON_GIL=0 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # Start worker (in another terminal)
-PYTHON_GIL=0 python -m app.worker.runner
+# --poll-interval: seconds between DB polls (default 2)
+PYTHON_GIL=0 python -m app.worker.runner --worker-id worker-1 --poll-interval 2
 ```
 
 #### Frontend
@@ -110,57 +113,96 @@ cd frontend
 npm install
 
 # Run Playwright tests (needs backend running)
-npx playwright test
+npx playwright test --reporter=line
 
 # Start dev server
 npm run dev
 ```
 
-## Scoring Engine
+## How It Works
 
-### LLM-Based Scoring (Primary)
+### Job Submission
 
-Uses Gemini 2.5 Flash Lite as primary LLM with OpenRouter fallback:
+1. **POST** 1–10 job descriptions (text or URLs) to `/api/v1/matches`
+2. Jobs are stored in PostgreSQL with `status=pending`
+3. Job IDs are pushed to Redis queue for immediate processing
+4. Workers claim jobs using `SELECT FOR UPDATE SKIP LOCKED` (safe concurrent processing)
 
-| Component    | Description                                    |
-|-------------|------------------------------------------------|
-| Skills      | LLM analyzes job requirements vs candidate     |
-| Experience  | LLM evaluates seniority and years alignment    |
-| Location    | LLM considers remote/hybrid/onsite preferences |
-| Batch       | Multiple jobs scored in one API call           |
+### URL Extraction
 
-### Deterministic Fallback
+When a URL is submitted, the worker:
 
-Keyword extraction + rule-based scoring (used when LLM unavailable):
+1. Fetches the page with a browser User-Agent header
+2. Attempts **JSON-LD extraction** — many job boards (Glints, Indeed, LinkedIn) embed `JobPosting` schema.org structured data in `<script type="application/ld+json">` tags
+3. Extracts: title, description, skills, experience, salary, location, company, employment type, benefits
+4. Falls back to **BeautifulSoup** text extraction for non-JSON-LD sites
 
-| Weight | Component    | How it scores                                          |
+### Scoring
+
+Scoring has two modes with automatic fallback:
+
+| Mode | Description | When Used |
+|------|-------------|-----------|
+| **LLM (Gemini)** | Batch scoring via Gemini 2.5 Flash Lite | Default when `GEMINI_AI_KEY` is set |
+| **LLM (OpenRouter)** | Fallback via OpenRouter API | When Gemini fails |
+| **Deterministic** | Keyword extraction + rule-based scoring | When LLM unavailable or `USE_LLM_SCORING=false` |
+
+#### Scoring Dimensions
+
+| Weight | Component    | How It Scores                                          |
 |--------|-------------|--------------------------------------------------------|
-| 50%    | Skills      | Overlap between candidate skills and job description   |
+| 50%    | Skills      | Overlap between candidate skills and job requirements  |
 | 30%    | Experience  | Seniority match + years of experience alignment        |
-| 20%    | Location    | Remote preference + location keywords                  |
+| 20%    | Location    | Remote preference + location compatibility             |
 
-### Configuration
+#### Caching
+
+Scores are cached in Upstash Redis (keyed by `source_hash + candidate_id`) with a 1-hour TTL. Duplicate submissions get instant cache hits.
+
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `USE_LLM_SCORING` | `true` | Enable LLM scoring (falls back to deterministic on failure) |
-| `LLM_BATCH_SIZE` | `5` | Max jobs per LLM API call |
+| `DATABASE_URL` | Neon connection | PostgreSQL connection string (auto-converted to asyncpg) |
+| `DATABASE_URL_SYNC` | Auto-derived | Sync PG connection for Alembic migrations |
+| `UPSTASH_REDIS_REST_URL` | - | Upstash Redis URL |
+| `UPSTASH_REDIS_REST_TOKEN` | - | Upstash Redis token |
 | `GEMINI_AI_KEY` | - | Google Gemini API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Gemini model name |
 | `OPENROUTER_KEY` | - | OpenRouter API key (fallback) |
 | `OPENROUTER_MODEL` | `stepfun/step-3.5-flash:free` | OpenRouter model name |
+| `USE_LLM_SCORING` | `true` | Enable LLM scoring (falls back to deterministic) |
+| `LLM_BATCH_SIZE` | `5` | Max jobs per LLM API call |
+| `WEIGHT_SKILLS` | `0.5` | Skills scoring weight |
+| `WEIGHT_EXPERIENCE` | `0.3` | Experience scoring weight |
+| `WEIGHT_LOCATION` | `0.2` | Location scoring weight |
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins |
+| `WORKER_POLL_INTERVAL` | `2.0` | Worker DB poll interval (seconds) |
+| `API_PREFIX` | `/api/v1` | API route prefix |
 
 ## API
 
 ### POST /api/v1/matches
 
-Submit a batch of job descriptions.
+Submit a batch of 1–10 job descriptions or URLs.
 
 ```json
 {
   "items": [
     {"content": "Senior Python Engineer — FastAPI, PostgreSQL, Docker"},
-    {"content": "Frontend Developer — React, TypeScript, 3+ years"}
+    {"content": "https://glints.com/id/opportunities/jobs/12345"},
+    {"content": "Frontend Developer — React, TypeScript, 3+ years", "source_type": "text"}
+  ]
+}
+```
+
+**Response** (201):
+```json
+{
+  "batch_id": "uuid",
+  "job_count": 3,
+  "jobs": [
+    {"id": "uuid", "status": "pending", ...}
   ]
 }
 ```
@@ -173,24 +215,42 @@ Get match result for a specific job.
 
 List all match jobs with optional filters.
 
+| Param | Type | Description |
+|-------|------|-------------|
+| `status` | string | Filter: `pending`, `processing`, `completed`, `failed` |
+| `limit` | int | Results per page (1–100, default 20) |
+| `offset` | int | Pagination offset (default 0) |
+
 ### GET /health
 
 Health check with cache status.
 
+## Database Schema
+
+- `candidates` — Candidate profiles (name, email, title, location)
+- `candidate_profiles` — Experience details, seniority, preferences, remote preference
+- `candidate_skills` — Skills with level and years used
+- `match_batches` — Groups of submitted job descriptions
+- `match_jobs` — Individual job scoring results with status, scores, recommendations, retry tracking, and worker locking
+
 ## Deployment
 
-### Backend (Render)
+### Docker Compose
+
+The `docker-compose.yml` runs all services locally:
+- `api` — FastAPI (port 8000)
+- `worker-1`, `worker-2` — Background workers
+- `frontend` — Next.js (port 3000)
+
+### Render
 
 The `render.yaml` blueprint deploys:
-- API service (uvicorn)
-- Worker service (polls PostgreSQL + Redis queue for jobs)
+- API service (uvicorn, free tier, Oregon)
+- Worker service (polls PostgreSQL + Redis queue)
 
-**Required environment variables:**
-- `DATABASE_URL` — Neon PostgreSQL connection string (asyncpg)
-- `DATABASE_URL_SYNC` — Neon PostgreSQL connection string (psycopg2, for Alembic)
-- `GEMINI_AI_KEY` — Google Gemini API key
-- `OPENROUTER_KEY` — OpenRouter fallback key
-- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` — Upstash Redis for job queue
+### Leapcell
+
+The `leapcell.yaml` deploys the API service.
 
 ### Frontend (Vercel)
 
@@ -200,24 +260,38 @@ npm run build
 vercel --prod
 ```
 
-Uses relative API URLs (`/api/v1/*`) with Next.js rewrites to backend.
-
-## Database Schema
-
-- `candidates` — Candidate profiles (name, email, title, location)
-- `candidate_profiles` — Experience details, seniority, preferences
-- `candidate_skills` — Skills with level and years used
-- `match_batches` — Groups of submitted job descriptions
-- `match_jobs` — Individual job scoring results with status, scores, and recommendations
+Uses relative API URLs (`/api/v1/*`) with Next.js rewrites to the backend URL set via `NEXT_PUBLIC_API_URL`.
 
 ## Testing
 
 ```bash
-# Backend integration tests (against Neon)
+# Backend integration tests (3/3 pass, runs against Neon)
 cd backend
 PYTHON_GIL=0 pytest tests/test_matches.py -v
 
-# Frontend Playwright tests (needs backend running)
+# Frontend Playwright tests (6/6 pass, needs backend running on port 8000)
 cd frontend
-npx playwright test
+npx playwright test --reporter=line
+```
+
+## Project Structure
+
+```
+backend/
+  app/
+    api/          # FastAPI route handlers
+    core/         # Config, settings
+    db/           # Session, seed script
+    models/       # SQLAlchemy ORM models
+    schemas/      # Pydantic request/response schemas
+    services/     # scoring, llm_scoring, cache, notifier
+    worker/       # Background worker (runner.py)
+  alembic/        # Database migrations
+  tests/          # Integration tests
+frontend/
+  src/
+    app/          # Next.js app directory
+    components/   # MatchDashboard, MatchForm, JobCard, ResultsList, StatusSummary
+    lib/          # API client, providers (TanStack Query)
+  tests/          # Playwright E2E tests
 ```

@@ -74,8 +74,9 @@ async def create_match_batch(
 ):
     """Submit a batch of 1-10 job descriptions for scoring.
 
-    Dispatches Celery task for async processing. Falls back to inline
-    processing if Celery is not configured (local dev).
+    Processes jobs inline (blocking) to guarantee completion before response.
+    On request-based hosts, background workers die with the request, so
+    inline processing is the only reliable approach.
     """
     candidate_id = await get_default_candidate(db)
 
@@ -114,57 +115,40 @@ async def create_match_batch(
     for job in jobs:
         await db.refresh(job)
 
-    # Try Celery dispatch first, fall back to inline processing
-    celery_dispatched = False
-    try:
-        from app.core.celery import celery_app
+    # Always process inline — ensures jobs complete before response.
+    # On request-based hosts (Leapcell), the process dies after the response,
+    # so background dispatch (Celery) won't work unless a separate worker
+    # service is deployed. Inline guarantees completion.
+    from app.worker.runner import MatchWorker
 
-        if celery_app:
-            from app.worker.tasks import process_match_jobs
-            process_match_jobs.delay([str(j.id) for j in jobs])
-            celery_dispatched = True
-            import logging
-            logging.getLogger("api").info(
-                f"Dispatched Celery task for {len(jobs)} jobs"
+    worker = MatchWorker(worker_id="inline-trigger")
+    try:
+        # Reset any stuck "processing" jobs from previous killed requests
+        async with worker.Session() as session:
+            from sqlalchemy import text
+            from datetime import datetime, timezone, timedelta
+
+            await session.execute(
+                text("""
+                    UPDATE match_jobs
+                    SET status = 'pending', locked_by = NULL, locked_at = NULL
+                    WHERE status = 'processing'
+                      AND locked_at < :stale_time
+                """),
+                {"stale_time": datetime.now(timezone.utc) - timedelta(minutes=2)},
             )
+            await session.commit()
+
+        # Process ALL pending jobs (current batch + any previously stuck ones)
+        processed = True
+        while processed:
+            processed = await worker._poll_once()
     except Exception as e:
         import logging
-        logging.getLogger("api").warning(
-            f"Celery dispatch failed, falling back to inline: {e}"
-        )
 
-    # Fallback: inline processing if Celery not available
-    if not celery_dispatched:
-        from app.worker.runner import MatchWorker
-
-        worker = MatchWorker(worker_id="inline-trigger")
-        try:
-            # Reset any stuck "processing" jobs from previous killed requests
-            async with worker.Session() as session:
-                from sqlalchemy import text
-                from datetime import datetime, timezone, timedelta
-
-                await session.execute(
-                    text("""
-                        UPDATE match_jobs
-                        SET status = 'pending', locked_by = NULL, locked_at = NULL
-                        WHERE status = 'processing'
-                          AND locked_at < :stale_time
-                    """),
-                    {
-                        "stale_time": datetime.now(timezone.utc)
-                        - timedelta(minutes=2)
-                    },
-                )
-                await session.commit()
-
-            # Process all pending jobs (current batch + any reset ones)
-            await worker._poll_once()
-        except Exception as e:
-            import logging
-            logging.getLogger("worker").error(f"Inline worker error: {e}")
-        finally:
-            await worker.engine.dispose()
+        logging.getLogger("worker").error(f"Inline worker error: {e}")
+    finally:
+        await worker.engine.dispose()
 
     # Re-fetch jobs with updated status/scores
     refreshed = []

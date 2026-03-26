@@ -1,10 +1,12 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Match Dashboard", () => {
-  test("shows empty state when no jobs exist", async ({ page }) => {
+  test("shows dashboard with results section", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Lazy Matcher" })).toBeVisible();
-    await expect(page.getByText("No results yet")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+    // With seed data and default "all statuses" filter, results should load
+    await expect(page.getByText("total")).toBeVisible({ timeout: 10000 });
   });
 
   test("validates form input", async ({ page }) => {

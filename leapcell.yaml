@@ -2,3 +2,27 @@ runtime: python
 build: pip install --no-cache-dir .
 start: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080
 port: 8080
+
+# ========================================
+# Leapcell Deployment Guide
+# ========================================
+#
+# SERVICE 1: API (Request-based) - Current
+#   Mode: Request-based (serverless)
+#   Command: uvicorn app.main:app
+#   Env vars needed: DATABASE_URL, GEMINI_AI_KEY, OPENROUTER_KEY, REDIS_URL
+#
+# SERVICE 2: Celery Worker (Persistent) - Optional
+#   Mode: Worker (persistent)
+#   Command: cd backend && PYTHON_GIL=0 .venv/bin/python -m app.worker.celery_worker
+#   Env vars needed: DATABASE_URL, REDIS_URL
+#   Note: Create as a separate Leapcell service linked to same repo
+#
+# FALLBACK: If worker service not deployed, API does inline processing
+# (blocks request for ~10-30s per job, but works fine for small batches)
+#
+# Required env vars for both services:
+#   DATABASE_URL=postgresql://neondb_owner:npg_XXXX@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+#   REDIS_URL=rediss://:token@pumped-monarch-83792.upstash.io:6379?ssl_cert_reqs=required
+#   GEMINI_AI_KEY=... (API service only)
+#   OPENROUTER_KEY=... (API service only)

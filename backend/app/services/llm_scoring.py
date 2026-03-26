@@ -23,6 +23,14 @@ from app.services.scoring import (
 
 logger = logging.getLogger("llm_scoring")
 
+# Timeout config: fail fast so deterministic fallback kicks in quickly
+LLM_TIMEOUT = httpx.Timeout(
+    connect=5.0,  # max time to establish connection
+    read=8.0,  # max time waiting for response data
+    write=5.0,  # max time sending request
+    pool=5.0,  # max time waiting for connection from pool
+)
+
 # Prompt template for LLM scoring
 SCORING_PROMPT = """You are a job matching expert. Score how well a candidate matches each job posting.
 
@@ -58,13 +66,21 @@ class LLMScorer:
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
+        """Get or create HTTP client with aggressive timeouts."""
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+            self._client = httpx.AsyncClient(timeout=LLM_TIMEOUT, follow_redirects=True)
         return self._client
 
+    @staticmethod
+    def _check_rate_limit(resp: httpx.Response, provider: str) -> None:
+        """Raise immediately on rate limits instead of waiting for timeout."""
+        if resp.status_code == 429:
+            raise RuntimeError(f"{provider} rate limited (429)")
+        if resp.status_code == 403 and "rate" in resp.text.lower():
+            raise RuntimeError(f"{provider} rate limited (403)")
+
     async def _call_gemini(self, prompt: str) -> str:
-        """Call Gemini API via REST."""
+        """Call Gemini API via REST. Raises on timeout/rate-limit for fast fallback."""
         client = self._get_client()
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -75,12 +91,13 @@ class LLMScorer:
             "generationConfig": {"temperature": 0.1},
         }
         resp = await client.post(url, json=payload)
+        self._check_rate_limit(resp, "Gemini")
         resp.raise_for_status()
         data = resp.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
     async def _call_openrouter(self, prompt: str) -> str:
-        """Call OpenRouter API (OpenAI-compatible)."""
+        """Call OpenRouter API. Raises on timeout/rate-limit for fast fallback."""
         client = self._get_client()
         resp = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -94,6 +111,7 @@ class LLMScorer:
                 "temperature": 0.1,
             },
         )
+        self._check_rate_limit(resp, "OpenRouter")
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
@@ -192,7 +210,7 @@ class LLMScorer:
                 f"Gemini returned {len(results)} results, expected {len(jobs)}"
             )
         except Exception as e:
-            logger.error(f"Gemini scoring failed: {e}")
+            logger.warning(f"Gemini failed ({type(e).__name__}): {e}")
 
         # Try OpenRouter fallback
         try:
@@ -206,10 +224,12 @@ class LLMScorer:
                 f"OpenRouter returned {len(results)} results, expected {len(jobs)}"
             )
         except Exception as e:
-            logger.error(f"OpenRouter scoring failed: {e}")
+            logger.warning(f"OpenRouter failed ({type(e).__name__}): {e}")
 
-        # Deterministic fallback
-        logger.info("Using deterministic scoring fallback")
+        # Deterministic fallback — always succeeds
+        logger.warning(
+            f"Both LLM providers failed, using deterministic fallback for {len(jobs)} jobs"
+        )
         return self._deterministic_fallback(
             jobs,
             candidate_skills,

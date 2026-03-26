@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     # Upstash Redis
     UPSTASH_REDIS_REST_URL: str = ""
     UPSTASH_REDIS_REST_TOKEN: str = ""
+    REDIS_URL: str = ""  # Native Redis URL for Celery (rediss://:pass@host:6379)
+    # Native Redis endpoint for Celery (TCP, not REST)
+    UPSTASH_REDIS_HOST: str = ""
+    UPSTASH_REDIS_PORT: int = 6379
+    UPSTASH_REDIS_PASSWORD: str = ""
 
     # LLM Scoring
     GEMINI_AI_KEY: str = ""

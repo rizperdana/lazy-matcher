@@ -185,10 +185,12 @@ async def list_match_jobs(
 
 
 @router.post("/worker/poll")
+@router.get("/worker/poll")  # Support GET for cron services
 async def trigger_worker_poll():
     """Trigger one worker poll cycle. Call via external cron every 30s.
 
     This replaces the long-running background worker for Leapcell Serverless.
+    Supports both GET and POST.
     """
     from app.worker.runner import MatchWorker
 

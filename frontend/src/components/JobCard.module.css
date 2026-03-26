@@ -144,3 +144,24 @@
   color: #fecdd3;
   line-height: 1.55;
 }
+
+@media (max-width: 600px) {
+  .card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .mini {
+    padding: 8px;
+  }
+  .v {
+    font-size: 16px;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+}

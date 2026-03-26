@@ -14,7 +14,7 @@ function formatTime(date: Date): string {
 
 export function MatchDashboard() {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<string>("completed"); // Default to completed for scoring
+  const [statusFilter, setStatusFilter] = useState<string>(""); // Default to show all
   const [scoreFilter, setScoreFilter] = useState<number>(0);
   const [yearFilter, setYearFilter] = useState<number>(0);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -137,11 +137,11 @@ export function MatchDashboard() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 aria-label="Status filter"
               >
-                <option value="completed">Completed only</option>
+                <option value="">All statuses</option>
+                <option value="completed">Completed</option>
                 <option value="pending">Pending</option>
                 <option value="processing">Processing</option>
                 <option value="failed">Failed</option>
-                <option value="">All statuses</option>
               </select>
               <label className={styles.pill} style={{ gap: "0.4rem", cursor: "default" }}>
                 <span>Min score %:</span>

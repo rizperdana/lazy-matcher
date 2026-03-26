@@ -274,4 +274,52 @@
   .topMeta {
     justify-content: flex-start;
   }
+  .row {
+    flex-wrap: wrap;
+  }
+  .cardHeader {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 600px) {
+  .shell {
+    padding: 12px;
+  }
+  .topbar {
+    padding: 12px;
+  }
+  .topMeta {
+    gap: 6px;
+  }
+  .pill {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .brandMark {
+    width: 36px;
+    height: 36px;
+  }
+  .brand h1 {
+    font-size: 16px;
+  }
+  .brand p {
+    font-size: 11px;
+  }
+  .cardHeader {
+    padding: 14px;
+  }
+  .cardBody {
+    padding: 14px;
+  }
+  .select {
+    width: 100%;
+  }
+  .textInput {
+    width: 100%;
+    max-width: 80px;
+  }
+  .infoBox {
+    padding: 10px 14px;
+  }
 }

@@ -135,9 +135,8 @@ async def create_match_batch(
             )
             await session.commit()
 
-        # Process each job directly (no claim step — if killed, stays "pending")
-        for job in jobs:
-            await worker._process_job(job)
+        # Process all pending jobs (current batch + any reset ones)
+        await worker._poll_once()
     except Exception as e:
         import logging
         logging.getLogger("worker").error(f"Inline worker error: {e}")

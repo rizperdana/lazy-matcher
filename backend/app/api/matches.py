@@ -135,14 +135,36 @@ async def create_match_batch(
                     WHERE status = 'processing'
                       AND locked_at < :stale_time
                 """),
-                {"stale_time": datetime.now(timezone.utc) - timedelta(minutes=2)},
+                {"stale_time": datetime.now(timezone.utc) - timedelta(seconds=30)},
             )
             await session.commit()
 
         # Process ALL pending jobs (current batch + any previously stuck ones)
+        # Each job gets a 60s timeout to prevent API request from hanging
         processed = True
         while processed:
-            processed = await worker._poll_once()
+            processed = await asyncio.wait_for(worker._poll_once(), timeout=60.0)
+    except asyncio.TimeoutError:
+        import logging
+
+        logging.getLogger("worker").warning(
+            "Inline worker timed out processing a job, marking as failed"
+        )
+        # Mark the stuck job as failed
+        async with worker.Session() as session:
+            from sqlalchemy import text
+
+            await session.execute(
+                text("""
+                    UPDATE match_jobs
+                    SET status = 'failed',
+                        error_message = 'Processing timed out (60s limit)'
+                    WHERE status = 'processing'
+                      AND locked_by = :worker_id
+                """),
+                {"worker_id": worker.worker_id},
+            )
+            await session.commit()
     except Exception as e:
         import logging
 

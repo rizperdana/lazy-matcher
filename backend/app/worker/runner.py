@@ -351,6 +351,33 @@ class MatchWorker:
                 await self._mark_job_failed(job, "No scores generated")
 
     async def _process_job(self, job: MatchJob):
+        """Process a claimed job: extract data and compute scores.
+
+        Wrapped with 45s timeout to prevent hanging on slow URL fetches or LLM calls.
+        """
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self._process_job_inner(job), timeout=45.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.worker_id}] Job {job.id} timed out after 45s")
+            async with self.Session() as session:
+                from sqlalchemy import update as sql_update
+                from app.db.models import MatchJob as MJ
+
+                await session.execute(
+                    sql_update(MJ)
+                    .where(MJ.id == job.id)
+                    .values(
+                        status="failed",
+                        error_message="Processing timed out (45s limit)",
+                        locked_by=None,
+                        locked_at=None,
+                    )
+                )
+                await session.commit()
+
+    async def _process_job_inner(self, job: MatchJob):
         """Process a claimed job: extract data and compute scores."""
         job_id = job.id
         start_time = datetime.now(timezone.utc)

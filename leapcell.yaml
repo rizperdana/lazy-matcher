@@ -7,22 +7,38 @@ port: 8080
 # Leapcell Deployment Guide
 # ========================================
 #
-# SERVICE 1: API (Request-based) - Current
+# LEAPCELL RATE LIMITS (free tier):
+#   Service Invocation: 100,000/mo
+#   Memory × Duration: 6 GB·h/mo
+#   Outbound Network: 2 GB/mo
+#   Log Storage: 100 MB
+#   Image Build: 1,000/mo
+#   Redis Command: unlimited
+#
+# STRATEGY: Minimize invocations by:
+#   1. API processes jobs INLINE (no worker invocation per job)
+#   2. Worker uses --run-once mode (exit after processing, no persistent loop)
+#   3. Worker triggered via Leapcell async call (not cron every 2s)
+#
+# SERVICE 1: API (Request-based)
 #   Mode: Request-based (serverless)
 #   Command: uvicorn app.main:app
-#   Env vars needed: DATABASE_URL, GEMINI_AI_KEY, OPENROUTER_KEY, REDIS_URL
+#   Env vars: DATABASE_URL, GEMINI_AI_KEY, OPENROUTER_KEY, REDIS_URL
+#   Behavior: Each API call processes jobs inline (~10-30s per batch)
 #
-# SERVICE 2: Celery Worker (Persistent) - Optional
-#   Mode: Worker (persistent)
-#   Command: cd backend && PYTHON_GIL=0 .venv/bin/python -m app.worker.celery_worker
-#   Env vars needed: DATABASE_URL, REDIS_URL
-#   Note: Create as a separate Leapcell service linked to same repo
+# SERVICE 2: Worker (Request-based, triggered by async call)
+#   Mode: Request-based (serverless)
+#   Command: python -m app.worker.runner --run-once --max-idle 3
+#   Env vars: DATABASE_URL, REDIS_URL, GEMINI_AI_KEY, OPENROUTER_KEY
+#   Behavior: Processes all pending jobs then exits
+#   Trigger: Leapcell async invocation (manual or external scheduler)
+#   Note: Create as separate Leapcell service linked to same repo
 #
-# FALLBACK: If worker service not deployed, API does inline processing
-# (blocks request for ~10-30s per job, but works fine for small batches)
+# FALLBACK: If worker not deployed, API handles all processing inline
+# (blocks request for ~10-30s per job, works fine for small batches)
 #
 # Required env vars for both services:
 #   DATABASE_URL=postgresql://neondb_owner:npg_XXXX@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
 #   REDIS_URL=rediss://:token@pumped-monarch-83792.upstash.io:6379?ssl_cert_reqs=required
-#   GEMINI_AI_KEY=... (API service only)
-#   OPENROUTER_KEY=... (API service only)
+#   GEMINI_AI_KEY=... (API service only, worker also needs it for scoring)
+#   OPENROUTER_KEY=... (fallback LLM scoring)

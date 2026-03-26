@@ -76,19 +76,17 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-  # ── Deploy: Render (Backend) ──────────────────────────────────────
+  # ── Deploy: Leapcell (Backend) ──────────────────────────────────────
   deploy-backend:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [test-backend]
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Render deploy
+      - name: Trigger Leapcell deploy (API)
         run: |
-          curl -s -X POST \
-            "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
-            -H "Content-Type: application/json"
-          echo "Deploy triggered for backend"
+          echo "Leapcell auto-deploys on push to main branch."
+          echo "API: https://lazy-matcher-perdanalaksono1738-nsb79v87.apn.leapcell.dev"
+          echo "Worker: Deploy as separate service with --run-once flag"
 
   # ── Deploy: Vercel (Frontend) ─────────────────────────────────────
   deploy-frontend:

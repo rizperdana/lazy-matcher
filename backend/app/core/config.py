@@ -32,12 +32,14 @@ class Settings(BaseSettings):
     WORKER_POLL_INTERVAL: float = 2.0
     WORKER_CONCURRENCY: int = 2
     WORKER_BATCH_SIZE: int = 1
+    WORKER_MAX_IDLE_CYCLES: int = 3  # Exit after N empty polls (set 0 to run forever)
+    WORKER_RUN_ONCE: bool = False  # Process all pending jobs then exit (Leapcell mode)
 
     # API
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
-        "https://lazy-matcher-perdanarizki5863-wonknjgm.leapcell.dev",
+        "https://lazy-matcher-flax.vercel.app",
     ]
 
     # Scoring weights (must sum to 1.0)
@@ -66,10 +68,16 @@ class Settings(BaseSettings):
             self.DATABASE_URL = self.DATABASE_URL.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
+        # asyncpg needs ssl=require (not sslmode=require)
+        if "sslmode=" in self.DATABASE_URL:
+            self.DATABASE_URL = self.DATABASE_URL.replace("sslmode=", "ssl=")
         if not self.DATABASE_URL_SYNC:
-            self.DATABASE_URL_SYNC = self.DATABASE_URL.replace(
+            sync_url = self.DATABASE_URL.replace(
                 "postgresql+asyncpg://", "postgresql://"
             )
+            # psycopg2 needs sslmode=require (not ssl=require)
+            sync_url = sync_url.replace("ssl=require", "sslmode=require")
+            self.DATABASE_URL_SYNC = sync_url
         return self
 
 

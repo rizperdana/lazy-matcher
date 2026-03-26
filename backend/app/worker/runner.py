@@ -75,7 +75,12 @@ class MatchWorker:
         self._running = True
 
     async def start(self, poll_interval: float = 2.0):
-        """Main worker loop. Checks Redis for notifications, falls back to DB poll."""
+        """Main worker loop. Checks Redis for notifications, falls back to DB poll.
+
+        Leapcell-friendly modes (via Settings):
+          WORKER_RUN_ONCE=True  → drain all pending jobs, then exit (request-based)
+          WORKER_MAX_IDLE_CYCLES=N → exit after N consecutive empty polls
+        """
         logger.info(
             f"[{self.worker_id}] Starting worker (poll_interval={poll_interval}s)"
         )
@@ -85,12 +90,33 @@ class MatchWorker:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._shutdown)
 
+        run_once = self.settings.WORKER_RUN_ONCE
+        max_idle = self.settings.WORKER_MAX_IDLE_CYCLES
+        idle_cycles = 0
+
         while self._running:
             try:
                 # 1. Try Redis notification queue first (immediate processing)
                 processed_redis = await self._drain_redis_queue()
                 # 2. Fall back to DB poll for any remaining jobs
                 processed_db = await self._poll_once()
+
+                if processed_redis or processed_db:
+                    idle_cycles = 0
+                else:
+                    idle_cycles += 1
+
+                # Leapcell mode: exit after processing all jobs
+                if run_once:
+                    logger.info(f"[{self.worker_id}] run_once=True, exiting")
+                    break
+                # Exit after N empty polls to save invocations
+                if max_idle and idle_cycles >= max_idle:
+                    logger.info(
+                        f"[{self.worker_id}] {max_idle} idle cycles reached, exiting"
+                    )
+                    break
+
                 if not processed_redis and not processed_db:
                     await asyncio.sleep(poll_interval)
             except Exception as e:
@@ -955,9 +981,25 @@ async def main():
     parser.add_argument(
         "--poll-interval", type=float, default=2.0, help="Poll interval in seconds"
     )
+    parser.add_argument(
+        "--run-once",
+        action="store_true",
+        default=False,
+        help="Process all pending jobs then exit (Leapcell request-based mode)",
+    )
+    parser.add_argument(
+        "--max-idle",
+        type=int,
+        default=0,
+        help="Exit after N consecutive empty polls (0 = run forever)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
+    if args.run_once:
+        settings.WORKER_RUN_ONCE = True
+    if args.max_idle:
+        settings.WORKER_MAX_IDLE_CYCLES = args.max_idle
     worker_id = args.worker_id or f"worker-{os.getpid()}"
     worker = MatchWorker(worker_id=worker_id, settings=settings)
     await worker.start(poll_interval=args.poll_interval)

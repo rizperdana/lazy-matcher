@@ -20,6 +20,17 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text, select, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
+# curl_cffi for TLS fingerprint bypass (bypasses JA3-based bot detection)
+# Note: curl-cffi requires Python 3.12 (pre-built wheels). Use try/except for 3.14+.
+try:
+    from curl_cffi import requests as curl_requests
+
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+    curl_requests = None
+    # Fallback: will use curl subprocess, cloudscraper, and httpx methods
+
 from app.core.config import get_settings
 from app.models import MatchJob, CandidateProfile, CandidateSkill, Candidate
 from app.services.scoring import (
@@ -641,10 +652,11 @@ class MatchWorker:
     async def _fetch_url_content(self, url: str) -> str:
         """Fetch content from a URL. Returns text content.
 
-        Tries 3 methods in order:
-        1. curl subprocess (system TLS, bypasses most bot protection)
-        2. cloudscraper (bypasses Cloudflare JS challenges)
-        3. httpx (async fallback with browser headers)
+        Tries 4 methods in order:
+        1. curl_cffi (TLS fingerprint bypass - best for Glints/Indeed)
+        2. curl subprocess (system TLS, bypasses most bot protection)
+        3. cloudscraper (bypasses Cloudflare JS challenges)
+        4. httpx (async fallback with browser headers)
         For job boards that embed JSON-LD structured data (Glints, Indeed, etc.),
         extracts the JobPosting schema data for rich content extraction.
         Falls back to BeautifulSoup text extraction for other sites.
@@ -655,7 +667,15 @@ class MatchWorker:
 
         self._validate_url_safety(url)
 
-        # --- Method 1: curl subprocess (bypasses bot protection via system TLS) ---
+        # --- Method 1: curl_cffi (TLS fingerprint bypass - best for Glints) ---
+        try:
+            html = await asyncio.to_thread(self._fetch_with_curl_cffi, url)
+            if html:
+                return self._parse_html_content(html)
+        except Exception as cffi_err:
+            logger.debug(f"curl_cffi failed for {url}: {cffi_err}")
+
+        # --- Method 2: curl subprocess (bypasses bot protection via system TLS) ---
         try:
             html = await asyncio.to_thread(self._fetch_with_curl, url)
             return self._parse_html_content(html)
@@ -707,6 +727,25 @@ class MatchWorker:
         if not result.stdout.strip():
             raise RuntimeError("curl returned empty response")
         return result.stdout
+
+    @staticmethod
+    def _fetch_with_curl_cffi(url: str) -> str | None:
+        """Fetch using curl-impersonate to bypass TLS fingerprinting (JA3).
+
+        curl_cffi mimics real browser TLS fingerprints, bypassing Glints' bot detection.
+        Falls back to None on failure to allow next method in chain.
+        """
+        if not HAS_CURL_CFFI:
+            return None
+        try:
+            resp = curl_requests.get(url, impersonate="chrome", timeout=20)
+            resp.raise_for_status()
+            if not resp.text.strip():
+                return None
+            return resp.text
+        except Exception as e:
+            logger.warning(f"curl_cffi failed: {type(e).__name__}: {e}")
+            return None
 
     @staticmethod
     def _fetch_with_cloudscraper(url: str) -> str:

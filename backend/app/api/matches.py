@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -18,7 +18,6 @@ from app.schemas import (
     MatchJobListResponse,
 )
 from app.services.scoring import is_url, source_hash
-from app.services.notifier import notify_jobs
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -71,11 +70,12 @@ def job_to_response(job: MatchJob) -> MatchJobResponse:
 @router.post("", response_model=MatchBatchResponse, status_code=201)
 async def create_match_batch(
     body: MatchBatchRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a batch of 1-10 job descriptions for scoring.
 
-    Returns immediately with pending jobs. Workers pick them up asynchronously.
+    Returns immediately with pending jobs. Worker processes them in the background.
     """
     candidate_id = await get_default_candidate(db)
 
@@ -114,8 +114,8 @@ async def create_match_batch(
     for job in jobs:
         await db.refresh(job)
 
-    # Notify worker via Redis for immediate processing
-    notify_jobs([str(j.id) for j in jobs])
+    # Trigger worker in background — no cron/Redis needed
+    background_tasks.add_task(_process_jobs_background)
 
     return MatchBatchResponse(
         batch_id=batch.id,
@@ -198,5 +198,19 @@ async def trigger_worker_poll():
     try:
         processed = await worker._poll_once()
         return {"processed": processed, "worker_id": worker.worker_id}
+    finally:
+        await worker.engine.dispose()
+
+
+async def _process_jobs_background():
+    """Background task: process pending jobs immediately after submission."""
+    from app.worker.runner import MatchWorker
+
+    worker = MatchWorker(worker_id="inline-trigger")
+    try:
+        await worker._poll_once()
+    except Exception as e:
+        import logging
+        logging.getLogger("worker").error(f"Background worker error: {e}")
     finally:
         await worker.engine.dispose()

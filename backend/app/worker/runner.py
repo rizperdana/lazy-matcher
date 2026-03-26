@@ -641,67 +641,84 @@ class MatchWorker:
     async def _fetch_url_content(self, url: str) -> str:
         """Fetch content from a URL. Returns text content.
 
+        Uses cloudscraper (bypasses Cloudflare/bot protection) as primary method,
+        falls back to httpx for sites that don't need it.
         For job boards that embed JSON-LD structured data (Glints, Indeed, etc.),
         extracts the JobPosting schema data for rich content extraction.
         Falls back to BeautifulSoup text extraction for other sites.
         """
-        import httpx
+        import asyncio
         import json
         import re
 
         self._validate_url_safety(url)
 
+        # --- Method 1: cloudscraper (bypasses bot protection) ---
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"macOS"',
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1",
-                "Referer": "https://www.google.com/",
-            }
-            async with httpx.AsyncClient(
-                timeout=20.0, follow_redirects=True, headers=headers
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                content_type = resp.headers.get("content-type", "")
+            html = await asyncio.to_thread(self._fetch_with_cloudscraper, url)
+            return self._parse_html_content(html)
+        except Exception as cloud_err:
+            logger.debug(f"cloudscraper failed for {url}: {cloud_err}")
 
-                if "html" in content_type:
-                    html = resp.text
+        # --- Method 2: httpx fallback ---
+        try:
+            html = await self._fetch_with_httpx(url)
+            return self._parse_html_content(html)
+        except Exception as httpx_err:
+            raise RuntimeError(f"Failed to fetch URL {url}: {httpx_err}")
 
-                    # --- Try JSON-LD extraction first (Glints, Indeed, etc.) ---
-                    json_ld_text = self._extract_json_ld_content(html)
-                    if json_ld_text:
-                        return json_ld_text
+    @staticmethod
+    def _fetch_with_cloudscraper(url: str) -> str:
+        """Synchronous fetch using cloudscraper (bypasses Cloudflare/bot protection)."""
+        import cloudscraper
 
-                    # --- Fallback: BeautifulSoup text extraction ---
-                    from bs4 import BeautifulSoup
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "darwin", "desktop": True}
+        )
+        resp = scraper.get(url, timeout=20)
+        resp.raise_for_status()
+        return resp.text
 
-                    soup = BeautifulSoup(html, "html.parser")
-                    for tag in soup(["script", "style"]):
-                        tag.decompose()
-                    return soup.get_text(separator="\n", strip=True)[:15000]
-                else:
-                    return resp.text[:10000]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
-                raise RuntimeError(
-                    f"Access denied (403) fetching {url}. "
-                    f"This site may block requests from cloud servers. "
-                    f"Try pasting the job description text directly instead."
-                )
-            raise RuntimeError(f"Failed to fetch URL {url}: {e}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch URL {url}: {e}")
+    async def _fetch_with_httpx(self, url: str) -> str:
+        """Async fetch using httpx with browser-like headers."""
+        import httpx
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"macOS"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "Referer": "https://www.google.com/",
+        }
+        async with httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True, headers=headers
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.text
+
+    def _parse_html_content(self, html: str) -> str:
+        """Extract job content from HTML via JSON-LD or BeautifulSoup."""
+        # --- Try JSON-LD extraction first (Glints, Indeed, etc.) ---
+        json_ld_text = self._extract_json_ld_content(html)
+        if json_ld_text:
+            return json_ld_text
+
+        # --- Fallback: BeautifulSoup text extraction ---
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        return soup.get_text(separator="\n", strip=True)[:15000]
 
     @staticmethod
     def _extract_json_ld_content(html: str) -> str | None:

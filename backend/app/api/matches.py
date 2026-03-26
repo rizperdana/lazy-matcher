@@ -182,3 +182,19 @@ async def list_match_jobs(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/worker/poll")
+async def trigger_worker_poll():
+    """Trigger one worker poll cycle. Call via external cron every 30s.
+
+    This replaces the long-running background worker for Leapcell Serverless.
+    """
+    from app.worker.runner import MatchWorker
+
+    worker = MatchWorker(worker_id="http-trigger")
+    try:
+        processed = await worker._poll_once()
+        return {"processed": processed, "worker_id": worker.worker_id}
+    finally:
+        await worker.engine.dispose()

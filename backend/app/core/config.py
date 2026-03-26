@@ -1,5 +1,6 @@
 """Application configuration loaded from environment variables."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -7,7 +8,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     """App settings. All values can be overridden via environment variables."""
 
-    DATABASE_URL: str = "postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require"
+    DATABASE_URL: str = ""
     DATABASE_URL_SYNC: str = ""
 
     # Upstash Redis
@@ -42,24 +43,26 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
-    def model_post_init(self, __context):
-        """Ensure DATABASE_URL has asyncpg driver and derive DATABASE_URL_SYNC."""
+    @model_validator(mode="after")
+    def validate_database_url(self) -> "Settings":
+        """Ensure DATABASE_URL is configured and has asyncpg driver."""
+        if not self.DATABASE_URL:
+            raise ValueError(
+                "DATABASE_URL is required. Set it as an environment variable."
+            )
         # Add asyncpg driver if plain postgresql://
         if (
-            self.DATABASE_URL
-            and self.DATABASE_URL.startswith("postgresql://")
+            self.DATABASE_URL.startswith("postgresql://")
             and "+asyncpg://" not in self.DATABASE_URL
         ):
             self.DATABASE_URL = self.DATABASE_URL.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
         if not self.DATABASE_URL_SYNC:
-            if self.DATABASE_URL:
-                self.DATABASE_URL_SYNC = self.DATABASE_URL.replace(
-                    "postgresql+asyncpg://", "postgresql://"
-                )
-            else:
-                self.DATABASE_URL_SYNC = "postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require"
+            self.DATABASE_URL_SYNC = self.DATABASE_URL.replace(
+                "postgresql+asyncpg://", "postgresql://"
+            )
+        return self
 
 
 @lru_cache

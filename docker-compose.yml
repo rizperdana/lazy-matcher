@@ -10,8 +10,8 @@ services:
              python -m app.db.seed &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
-      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+      DATABASE_URL: ${DATABASE_URL_ASYNC}
+      DATABASE_URL_SYNC: ${DATABASE_URL}
       UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
       UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
       GEMINI_AI_KEY: ${GEMINI_AI_KEY}
@@ -25,8 +25,8 @@ services:
       dockerfile: Dockerfile
     command: python -m app.worker.runner --worker-id worker-1 --poll-interval 2
     environment:
-      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
-      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+      DATABASE_URL: ${DATABASE_URL_ASYNC}
+      DATABASE_URL_SYNC: ${DATABASE_URL}
       UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
       UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
       GEMINI_AI_KEY: ${GEMINI_AI_KEY}
@@ -38,8 +38,8 @@ services:
       dockerfile: Dockerfile
     command: python -m app.worker.runner --worker-id worker-2 --poll-interval 2
     environment:
-      DATABASE_URL: postgresql+asyncpg://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?ssl=require
-      DATABASE_URL_SYNC: postgresql://neondb_owner:npg_UZ8qwH3tdmNo@ep-purple-silence-a1qdlxvr-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+      DATABASE_URL: ${DATABASE_URL_ASYNC}
+      DATABASE_URL_SYNC: ${DATABASE_URL}
       UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
       UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
       GEMINI_AI_KEY: ${GEMINI_AI_KEY}

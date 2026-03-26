@@ -560,6 +560,51 @@ class MatchWorker:
             else "flexible",
         }
 
+    @staticmethod
+    def _validate_url_safety(url: str) -> None:
+        """Validate URL is safe to fetch. Raises ValueError on unsafe URLs.
+
+        Prevents SSRF attacks by blocking requests to private IP ranges,
+        cloud metadata endpoints, and non-HTTP schemes.
+        """
+        import ipaddress
+        from urllib.parse import urlparse
+        import socket
+
+        parsed = urlparse(url)
+
+        # Reject non-HTTP schemes
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Rejected URL: scheme '{parsed.scheme}' is not allowed")
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("Rejected URL: missing hostname")
+
+        # Block known sensitive hostnames
+        blocked_hosts = {
+            "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::]",
+            "metadata.google.internal",
+        }
+        if hostname.lower() in blocked_hosts:
+            raise ValueError(f"Rejected URL: hostname '{hostname}' is blocked")
+
+        # Block cloud metadata IPs explicitly (before DNS resolution)
+        metadata_ips = {"169.254.169.254", "169.254.170.2"}
+        if hostname in metadata_ips:
+            raise ValueError(f"Rejected URL: cloud metadata endpoint '{hostname}' is blocked")
+
+        # Resolve hostname and check for private IP ranges
+        try:
+            resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+            ip = ipaddress.ip_address(resolved_ip)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise ValueError(
+                    f"Rejected URL: '{hostname}' resolves to private IP {resolved_ip}"
+                )
+        except socket.gaierror:
+            raise ValueError(f"Rejected URL: cannot resolve hostname '{hostname}'")
+
     async def _fetch_url_content(self, url: str) -> str:
         """Fetch content from a URL. Returns text content.
 
@@ -570,6 +615,8 @@ class MatchWorker:
         import httpx
         import json
         import re
+
+        self._validate_url_safety(url)
 
         try:
             headers = {
